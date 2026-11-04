@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#d9442b">
+<title>太鼓スコア記録</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><h1>太鼓スコア記録</h1><div class="who"><div id="who"></div><span class="pill" id="syncPill"></span></div></header>
+<main><div id="banners"></div><div id="view"></div></main>
+<nav id="nav">
+  <button data-v="input"><span class="ic">🥁</span>入力</button>
+  <button data-v="history"><span class="ic">📊</span>履歴</button>
+  <button data-v="songs"><span class="ic">🎵</span>楽曲</button>
+  <button data-v="mydata"><span class="ic">👤</span>マイデータ</button>
+</nav>
+<div class="toast" id="toast"></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+/* ===================== データ ===================== */
+const LS_KEY = 'taikoScore.v2';
+let db = { player: { id: '', name: '', deviceId: '', token: '' }, songs: [], records: [], events: [], lastExportAt: null, lastSyncAt: null };
+let storageOK = true;
+const syncSt = { running: false, error: null, authError: false, again: false };
+const state = {
+  view: 'input', editId: null, lastSaved: null, photo: null,
+  pick: { title: null, songId: '' }, newPick: null, pickQ: '',
+  histSong: 'all', songForm: null, songQ: ''
+};
+
+function normSong(s) {
+  if (!s || typeof s !== 'object' || !s.id || !s.title) return null;
+  const course = COURSES[s.course] ? s.course : 'oni';
+  const level = Math.min(10, Math.max(1, n0(s.level) || 1));
+  let sub = null;
+  if (level === 10 && s.subLevel && TIERS.includes(s.subLevel.tier)) {
+    const t = s.subLevel.tier;
+    sub = { tier: t, tag: t === 'SS' ? null : t === 'F' ? 'jiriki' : (s.subLevel.tag === 'kojinsa' ? 'kojinsa' : 'jiriki') };
+  }
+  return { id: String(s.id), title: String(s.title).trim().slice(0, 100), genre: String(s.genre || '').slice(0, 40), course, level, subLevel: sub,
+    maxCombo: nn(s.maxCombo), shoko: nn(s.shoko), createdBy: s.createdBy == null ? '' : String(s.createdBy),
+    createdAt: s.createdAt || isoLocal(), updatedAt: s.updatedAt || isoLocal(), deleted: !!s.deleted, _sv: s._sv || null };
+}
+function normRec(r) {
+  if (!r || typeof r !== 'object' || !r.id) return null;
+  const score = nn(r.score);
+  return { id: String(r.id), songId: r.songId ? String(r.songId) : null, good: n0(r.good), ok: n0(r.ok), bad: n0(r.bad), roll: n0(r.roll), score,
+    scoreSource: ['auto', 'manual', 'none'].includes(r.scoreSource) ? r.scoreSource : (score != null ? 'manual' : 'none'),
+    mismatch: !!r.mismatch, playedAt: r.playedAt || r.createdAt || isoLocal(), createdAt: r.createdAt || isoLocal(), updatedAt: r.updatedAt || isoLocal(),
+    deleted: !!r.deleted, photoId: r.photoId || null, status: r.status === 'rejected' ? 'rejected' : 'ok', localPhoto: !!r.localPhoto, _sv: r._sv || null };
+}
+function load() {
+  try {
+    localStorage.setItem('__taiko_t', '1'); localStorage.removeItem('__taiko_t');
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const o = JSON.parse(raw);
+      db.player = Object.assign(db.player, o.player || {});
+      db.songs = (o.songs || []).map(normSong).filter(Boolean);
+      db.records = (o.records || []).map(normRec).filter(Boolean);
+      db.events = Array.isArray(o.events) ? o.events : [];
+      db.lastExportAt = o.lastExportAt || null; db.lastSyncAt = o.lastSyncAt || null;
+    }
+  } catch (e) { storageOK = false; }
+  if (!db.player.deviceId) { db.player.deviceId = 'd_' + rand(10).toLowerCase(); save(); }
+}
+function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch (e) { storageOK = false; } }
+
+const me = () => db.player.id;
+const registered = () => !!(db.player.id && (db.player.token || !API_URL));
+const getSong = id => id ? (db.songs.find(s => s.id === id) || null) : null;
+const activeSongs = () => db.songs.filter(s => !s.deleted).sort(songSort);
+const activeRecs = () => db.records.filter(r => !r.deleted);
+const groupMap = () => groupSongs(db.songs);
+const canEditSong = s => !s.createdBy || s.createdBy === me();
+const pendingRecs = () => db.records.filter(r => r._sv !== r.updatedAt);
+const pendingSongs = () => db.songs.filter(s => canEditSong(s) && s._sv !== s.updatedAt);
+const pendingPhotos = () => db.records.filter(r => r.localPhoto);
+const pendingCount = () => pendingRecs().length + pendingSongs().length + pendingPhotos().length;
+function newRecordId() { const st = stamp(new Date()); let id; do { id = `TK-${me()}-${st}-${rand(4)}`; } while (db.records.some(r => r.id === id)); return id; }
+function newSongId() { let id; do { id = 's_' + rand(8).toLowerCase(); } while (db.songs.some(s => s.id === id)); return id; }
+const activeEvents = () => (db.events || []).filter(e => eventActive(e));
+const upcomingEvents = () => (db.events || []).filter(e => !e.deleted && ts(e.start) > Date.now()).sort((a, b) => ts(a.start) - ts(b.start));
+function activeEventChartIds() { const s = new Set(); activeEvents().forEach(e => (e.chartIds || []).forEach(id => s.add(id))); return s; }
+/** ランキング対象かどうか（写真あり・却下でない） */
+function rankState(r) {
+  if (r.status === 'rejected') return 'rejected';
+  if (r.photoId) return 'ok';
+  if (r.localPhoto) return 'waiting';
+  return 'none';
+}
+
+/* ===================== 写真（端末内の送信待ち保管） ===================== */
+const photoMem = new Map();
+const photoStore = {
+  _db: null,
+  open() {
+    return new Promise((res, rej) => {
+      if (this._db) return res(this._db);
+      if (!window.indexedDB) return rej(new Error('no idb'));
+      const rq = indexedDB.open('taikoScorePhotos', 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('p');
+      rq.onsuccess = () => { this._db = rq.result; res(this._db); };
+      rq.onerror = () => rej(rq.error);
+    });
+  },
+  async run(mode, fn) {
+    const d = await this.open();
+    return new Promise((res, rej) => {
+      const t = d.transaction('p', mode), rq = fn(t.objectStore('p'));
+      t.oncomplete = () => res(rq ? rq.result : undefined); t.onerror = () => rej(t.error);
+    });
+  },
+  async get(k) { try { return await this.run('readonly', s => s.get(k)); } catch (e) { return photoMem.get(k); } },
+  async set(k, v) { try { await this.run('readwrite', s => s.put(v, k)); } catch (e) { photoMem.set(k, v); } },
+  async del(k) { photoMem.delete(k); try { await this.run('readwrite', s => s.delete(k)); } catch (e) {} }
+};
+/** 1920×1080の枠に収まるよう縮小（縦横比維持・拡大しない）し、JPEGのbase64を返す */
+function compressImage(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const sc = Math.min(1, 1920 / img.naturalWidth, 1080 / img.naturalHeight);
+      const w = Math.max(1, Math.round(img.naturalWidth * sc)), h = Math.max(1, Math.round(img.naturalHeight * sc));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      res({ b64: c.toDataURL('image/jpeg', 0.82).split(',')[1], w, h });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('画像を読み込めませんでした')); };
+    img.src = url;
+  });
+}
+
+/* ===================== 同期 ===================== */
+const songPayload = s => ({ id: s.id, title: s.title, genre: s.genre, course: s.course, level: s.level, subLevel: s.subLevel,
+  maxCombo: s.maxCombo, shoko: s.shoko, createdAt: s.createdAt, updatedAt: s.updatedAt, deleted: s.deleted });
+const recPayload = r => ({ id: r.id, songId: r.songId, good: r.good, ok: r.ok, bad: r.bad, roll: r.roll, score: r.score, scoreSource: r.scoreSource,
+  mismatch: r.mismatch, playedAt: r.playedAt, createdAt: r.createdAt, updatedAt: r.updatedAt, deleted: r.deleted });
+
+function mergeServerSongs(list) {
+  const local = new Map(db.songs.map(s => [s.id, s]));
+  const next = [];
+  for (const s0 of list || []) {
+    const s = normSong(s0); if (!s) continue;
+    s._sv = s.updatedAt;
+    const l = local.get(s.id);
+    // 自分が編集中でまだ送っていない譜面は、端末側を優先
+    if (l && canEditSong(l) && l._sv !== l.updatedAt && ts(l.updatedAt) > ts(s.updatedAt)) next.push(l); else next.push(s);
+    local.delete(s.id);
+  }
+  for (const l of local.values()) if (canEditSong(l) && l._sv !== l.updatedAt) next.push(l); // 未送信の自作譜面は残す
+  db.songs = next;
+}
+function applyRemap(remap) {
+  Object.entries(remap || {}).forEach(([from, to]) => {
+    db.records.forEach(r => { if (r.songId === from) r.songId = to; });
+    db.songs = db.songs.filter(s => s.id !== from);
+    if (state.pick.songId === from) state.pick.songId = to;
+  });
+}
+function mergeMine(list) {
+  for (const s0 of list || []) {
+    const s = normRec(s0); if (!s) continue;
+    const l = db.records.find(x => x.id === s.id);
+    if (!l) { s._sv = s.updatedAt; db.records.push(s); continue; }
+    l.photoId = s.photoId; l.status = s.status;
+    if (l._sv === l.updatedAt && ts(s.updatedAt) > ts(l.updatedAt)) Object.assign(l, s, { _sv: s.updatedAt, localPhoto: l.localPhoto });
+  }
+}
+let syncTimer = null;
+function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(() => runSync(false), ms == null ? 400 : ms); }
+async function runSync(manual) {
+  if (!API_URL) { if (manual) toast('サーバーが設定されていません'); return; }
+  if (syncSt.running) { syncSt.again = true; return; }
+  syncSt.running = true; syncSt.error = null; refreshChrome();
+  try {
+    const pub = await api('getPublic', {});
+    mergeServerSongs(pub.songs);
+    db.events = pub.events || [];
+    if (db.player.id && db.player.token) {
+      const auth = { playerId: db.player.id, token: db.player.token };
+      const ps = pendingSongs(), pr = pendingRecs();
+      if (ps.length || pr.length) {
+        const snap = new Map([...ps, ...pr].map(x => [x.id, x.updatedAt]));
+        const res = await api('sync', Object.assign({ songs: ps.map(songPayload), records: pr.map(recPayload) }, auth));
+        applyRemap(res.remap);
+        ps.forEach(s => { if (!(res.remap || {})[s.id] && s.updatedAt === snap.get(s.id)) s._sv = s.updatedAt; });
+        (res.accepted || []).forEach(id => { const r = db.records.find(x => x.id === id); if (r && r.updatedAt === snap.get(id)) r._sv = r.updatedAt; });
+        save();
+      }
+      for (const r of db.records.filter(x => x.localPhoto && x._sv)) {
+        const b64 = await photoStore.get(r.id);
+        if (!b64) { r.localPhoto = false; continue; }
+        const res = await api('uploadPhoto', Object.assign({ recordId: r.id, data: b64 }, auth), 90000);
+        r.photoId = res.photoId; r.localPhoto = false;
+        await photoStore.del(r.id); save();
+      }
+      const mine = await api('getMine', auth);
+      mergeMine(mine.records);
+      if (mine.player && mine.player.name) db.player.name = mine.player.name;
+      syncSt.authError = false;
+    }
+    db.lastSyncAt = isoLocal();
+  } catch (e) {
+    if (e.code === 'auth') { syncSt.authError = true; syncSt.error = '引き継ぎコードが無効になっています'; }
+    else syncSt.error = e.message || '通信できませんでした';
+    if (manual) toast(syncSt.error, 2600);
+  } finally {
+    syncSt.running = false; save();
+    afterSync();
+    if (syncSt.again) { syncSt.again = false; scheduleSync(800); }
+  }
+}
+/** 同期後の再描画。入力画面は入力途中の値を消さないよう部分更新にとどめる */
+function afterSync() {
+  refreshChrome();
+  if (state.view === 'input') { renderInputExtras(); if (!state.pick.title) renderPickList(); else renderPicker(); updateInput(); }
+  else render();
+}
+
+/* ===================== 画面共通 ===================== */
+function leaveEdit() { if (state.editId) { state.editId = null; state.pick = state.newPick || { title: null, songId: '' }; state.newPick = null; } }
+function go(v) { if (v !== 'input') leaveEdit(); if (v !== 'songs') state.songForm = null; state.view = v; render(); window.scrollTo(0, 0); }
+function refreshChrome() {
+  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === state.view));
+  $('#who').textContent = db.player.id ? `${db.player.name || db.player.id} @${db.player.id}` : 'プレイヤー未登録';
+  const n = pendingCount(), pill = $('#syncPill');
+  pill.textContent = !API_URL ? 'オフライン利用' : syncSt.running ? '同期中…' : syncSt.error ? (n ? `未送信 ${n}件` : '通信エラー') : n ? `未送信 ${n}件` : '同期済み';
+  let h = '';
+  if (!storageOK) h += `<div class="banner err">この開き方ではデータを保存できません。通常のブラウザで開き直してください。</div>`;
+  if (!API_URL) h += `<div class="banner err">サーバーURLが設定されていません（config.js）。記録はこの端末にだけ保存されます。</div>`;
+  if (!registered() && state.view !== 'mydata') h += `<button class="banner" onclick="go('mydata')">はじめにマイデータでプレイヤー登録をしてください ›</button>`;
+  if (syncSt.authError && state.view !== 'mydata') h += `<button class="banner err" onclick="go('mydata')">引き継ぎコードが無効です。マイデータで引き継ぎをやり直してください ›</button>`;
+  else if (API_URL && n && syncSt.error && !syncSt.running) h += `<button class="banner soft" onclick="runSync(true)">📡 未送信が${n}件あります（${esc(syncSt.error)}）。タップで再送 ›</button>`;
+  $('#banners').innerHTML = h;
+}
+function render() {
+  refreshChrome();
+  ({ input: viewInput, history: viewHistory, songs: viewSongs, mydata: viewMyData })[state.view]();
+}
+
+/* ===================== 入力画面 ===================== */
+function viewInput() {
+  const rec = state.editId ? db.records.find(r => r.id === state.editId) : null;
+  const v = k => rec ? rec[k] : '';
+  const manual = rec ? rec.scoreSource !== 'auto' : false;
+  const pa = toLocalInput(rec ? new Date(rec.playedAt) : new Date());
+  state.photo = null;
+  $('#view').innerHTML = `
+  <div id="extras"></div>
+  <div class="card">
+    <h2>${rec ? '記録を編集' : 'スコアを登録'}</h2>
+    ${rec ? `<div class="muted num">ID: ${esc(rec.id)}（編集してもIDは変わりません）</div>` : ''}
+    <div id="picker"></div>
+    <div class="grid2 judge">
+      <div><label class="j-good">良</label><input id="good" type="number" inputmode="numeric" min="0" value="${v('good')}"></div>
+      <div><label class="j-ok">可</label><input id="ok" type="number" inputmode="numeric" min="0" value="${v('ok')}"></div>
+      <div><label class="j-bad">不可</label><input id="bad" type="number" inputmode="numeric" min="0" value="${v('bad')}"></div>
+      <div><label class="j-roll">連打</label><input id="roll" type="number" inputmode="numeric" min="0" value="${v('roll')}"></div>
+    </div>
+    <div id="sumInfo" class="muted" style="margin-top:8px"></div>
+    <label>スコア</label>
+    <div id="autoScore" class="scorebox">-</div>
+    <label class="chk" id="manualWrap"><input type="checkbox" id="manual" ${manual ? 'checked' : ''}> スコアを手入力する</label>
+    <input id="scoreManual" type="number" inputmode="numeric" min="0" placeholder="スコアを入力" value="${rec && rec.scoreSource === 'manual' ? (rec.score ?? '') : ''}" style="margin-top:8px">
+    <label>リザルト写真 <span style="font-size:12px">（ランキングに載せる場合は必須）</span></label>
+    <div class="row">
+      <span class="btn sub small filebtn">📷 写真を選ぶ<input type="file" id="photo" accept="image/*"></span>
+      <button type="button" class="btn sub small hidden" id="photoClear">外す</button>
+    </div>
+    <div id="photoPrev" class="photo-prev muted">${rec ? photoStatusText(rec) : ''}</div>
+    <label>プレイ日時</label>
+    <input id="playedAt" type="datetime-local" value="${pa}">
+    <button class="btn" id="saveBtn">${rec ? '変更を保存' : '記録する'}</button>
+    ${rec ? '<button class="btn sub" id="cancelBtn">キャンセル</button>' : ''}
+  </div>`;
+
+  ['good', 'ok', 'bad', 'roll', 'scoreManual'].forEach(id => { const el = $('#' + id); el.oninput = updateInput; el.onfocus = () => el.select(); });
+  $('#manual').onchange = updateInput;
+  $('#photo').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    $('#photoPrev').textContent = '写真を圧縮しています…';
+    try {
+      const p = await compressImage(f);
+      state.photo = p;
+      $('#photoPrev').innerHTML = `<img src="data:image/jpeg;base64,${p.b64}" alt=""><span>${p.w}×${p.h}・約${Math.round(p.b64.length * 0.75 / 1024)}KB<br>${rec && rec.photoId ? '保存すると写真を差し替えます' : '保存するとランキング対象になります'}</span>`;
+      $('#photoClear').classList.remove('hidden');
+    } catch (err) { $('#photoPrev').textContent = err.message; }
+    e.target.value = '';
+  };
+  $('#photoClear').onclick = () => { state.photo = null; $('#photoPrev').innerHTML = rec ? photoStatusText(rec) : ''; $('#photoClear').classList.add('hidden'); };
+  $('#saveBtn').onclick = () => saveRecord(rec);
+  if (rec) $('#cancelBtn').onclick = () => { leaveEdit(); go('history'); };
+  renderInputExtras();
+  renderPicker();
+  updateInput();
+}
+function photoStatusText(r) {
+  const st = rankState(r);
+  return st === 'ok' ? '📷 写真は送信済みです（ランキング対象）' : st === 'waiting' ? '📷 写真は送信待ちです' :
+    st === 'rejected' ? '⚠ この記録は管理者により却下されています' : '写真はまだありません（ランキング対象外）';
+}
+/** 開催中の大会と、登録直後の結果カード */
+function renderInputExtras() {
+  const box = $('#extras'); if (!box) return;
+  let h = '';
+  const act = activeEvents(), up = upcomingEvents().slice(0, 2);
+  if (!state.editId && (act.length || up.length)) {
+    h += `<div class="card"><h2>🏆 大会</h2>` + act.map(e => {
+      const charts = (e.chartIds || []).map(getSong).filter(Boolean);
+      return `<div style="margin-bottom:8px"><strong>${esc(e.name)}</strong> <span class="badge b-ok">開催中</span>
+        <div class="muted">${fmtDate(e.start)} 〜 ${fmtDate(e.end)}</div>
+        ${e.note ? `<div class="muted">${esc(e.note)}</div>` : ''}
+        <div class="row" style="margin-top:6px">${charts.map(s => `<button type="button" class="btn sub small cc-${s.course}" data-ev="${esc(s.id)}" style="border-color:var(--cc)">${esc(s.title)} <b style="color:var(--cc)">${COURSE_SHORT[s.course]}</b></button>`).join('')}</div></div>`;
+    }).join('') + up.map(e => `<div class="muted">開催予定：${esc(e.name)}（${fmtDay(e.start)}〜）</div>`).join('') +
+      (act.length ? `<div class="muted" style="margin-top:6px">課題譜面をタップすると選択できます。期間中の写真付き記録がランキング対象です。</div>` : '') + `</div>`;
+  }
+  const r = db.records.find(x => x.id === state.lastSaved);
+  if (r && !r.deleted && !state.editId) {
+    const st = rankState(r), pend = r._sv !== r.updatedAt;
+    h += `<div class="card"><h2>記録しました</h2>
+      <div>${esc(songName(getSong(r.songId)))}　<b class="num">${fmtN(r.score)}</b></div>
+      <div class="muted" style="margin-top:4px">${st === 'ok' ? '📷 写真付き：ランキング対象です' : st === 'waiting' ? '📷 写真付き：送信後にランキング対象になります' : '写真なし：ランキング対象外です（履歴から後で写真を追加できます）'}</div>
+      <div class="muted">${pend || r.localPhoto ? (API_URL ? '📡 送信待ち（電波が戻ると自動で送信します）' : 'この端末に保存しました') : '✅ サーバーに送信済み'}</div>
+      <button class="btn sub small" style="margin-top:8px" onclick="state.lastSaved=null;renderInputExtras()">閉じる</button></div>`;
+  }
+  box.innerHTML = h;
+  box.querySelectorAll('[data-ev]').forEach(b => b.onclick = () => {
+    const s = getSong(b.dataset.ev); if (!s) return;
+    state.pick = { title: s.title, songId: s.id }; renderPicker(); updateInput();
+    $('#picker').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+function currentGroup() {
+  const p = state.pick; if (!p.title) return null;
+  let g = groupMap().get(p.title);
+  const cur = getSong(p.songId);
+  if (cur && cur.deleted) g = g ? { ...g, charts: [...g.charts, cur].sort((a, b) => courseIdx(a.course) - courseIdx(b.course)) } : { title: cur.title, genre: cur.genre, charts: [cur] };
+  return g || null;
+}
+function renderPicker() {
+  const el = $('#picker'); if (!el) return;
+  const g = currentGroup();
+  if (!g) {
+    if (state.pick.title) state.pick = { title: null, songId: '' };
+    el.innerHTML = `<label>楽曲</label>
+      <input id="q" type="search" placeholder="曲名・ジャンルで検索" autocomplete="off" value="${esc(state.pickQ)}">
+      <div id="pickList" class="plist"></div>
+      <div class="muted" style="margin-top:6px">楽曲を選ばずに記録すると「楽曲未選択」として保存されます。</div>`;
+    $('#q').oninput = e => { state.pickQ = e.target.value; renderPickList(); };
+    renderPickList();
+    return;
+  }
+  const cur = getSong(state.pick.songId);
+  el.innerHTML = `<label>楽曲</label>
+    <div class="picked"${gcStyle(g.genre)}><div><strong>${esc(g.title)}</strong>${genreTag(g.genre)}</div>
+    <button type="button" class="btn sub small" id="chg">変更</button></div>
+    <label>難易度${cur ? '' : '<span class="badge b-warn">選択してください</span>'}</label>
+    ${courseButtons(g, state.pick.songId, 'pick', { eventIds: activeEventChartIds() })}
+    <div id="songInfo" class="muted" style="margin-top:6px"></div>`;
+  $('#chg').onclick = () => { state.pick = { title: null, songId: '' }; state.pickQ = ''; renderPicker(); updateInput(); };
+  el.querySelectorAll('.cbtn[data-id]').forEach(b => b.onclick = () => { state.pick.songId = b.dataset.id; renderPicker(); updateInput(); });
+}
+function renderPickList() {
+  const box = $('#pickList'); if (!box) return;
+  const gm = groupMap(), t = state.pickQ.trim().toLowerCase(), evIds = activeEventChartIds();
+  let gs = [...gm.values()];
+  if (t) gs = gs.filter(g => (g.title + ' ' + g.genre).toLowerCase().includes(t));
+  else {
+    const last = new Map();
+    for (const r of activeRecs()) { const s = getSong(r.songId); if (s) last.set(s.title, Math.max(last.get(s.title) || 0, ts(r.playedAt))); }
+    gs.sort((a, b) => (last.get(b.title) || 0) - (last.get(a.title) || 0));
+  }
+  const shown = gs.slice(0, 30);
+  box.innerHTML = shown.length
+    ? shown.map(g => `<button type="button" class="pitem" data-t="${esc(g.title)}"${gcStyle(g.genre)}><span>${g.charts.some(c => evIds.has(c.id)) ? '🏆 ' : ''}${esc(g.title)}</span>${dots(g)}</button>`).join('') +
+      (gs.length > 30 ? `<div class="muted" style="padding:8px 10px">ほか${gs.length - 30}曲は検索してください</div>` : '')
+    : `<div class="muted" style="padding:10px">${gm.size ? '該当する楽曲がありません' : '楽曲がまだありません（サーバーから読み込み中か、「楽曲」タブで追加できます）'}</div>`;
+  box.querySelectorAll('.pitem').forEach(b => b.onclick = () => {
+    const g = gm.get(b.dataset.t);
+    state.pick = { title: b.dataset.t, songId: g && g.charts.length === 1 ? g.charts[0].id : '' };
+    renderPicker(); updateInput();
+  });
+}
+function updateInput() {
+  if (!$('#autoScore')) return;
+  const s = getSong(state.pick.songId);
+  const g = n0($('#good').value), o = n0($('#ok').value), b = n0($('#bad').value), r = n0($('#roll').value);
+  const info = $('#songInfo');
+  if (info) info.innerHTML = s ? `${esc(COURSES[s.course])}・${esc(lvLabel(s))}・最大${s.maxCombo ?? '?'}コンボ・初項 ${s.shoko ? fmtN(s.shoko) : '未登録'}${s.deleted ? '<span class="badge b-warn">削除済み譜面</span>' : ''}` : '';
+  const sum = g + o + b;
+  let si = `判定合計 ${sum}`;
+  if (s && s.maxCombo) si += ` / ${s.maxCombo}` + (sum === s.maxCombo ? '<span class="badge b-ok">一致</span>' : sum > 0 ? '<span class="badge b-warn">不一致</span>' : '');
+  $('#sumInfo').innerHTML = si;
+  const auto = s && s.shoko ? calcScore(s.shoko, g, o, r) : null;
+  const box = $('#autoScore'), man = $('#manual').checked, mi = $('#scoreManual');
+  if (auto == null) {
+    box.className = 'scorebox na';
+    box.textContent = state.pick.title && !s ? '難易度を選ぶとスコアを自動計算します' : '自動計算なし（初項が未登録のため手入力）';
+    $('#manualWrap').classList.add('hidden'); mi.classList.remove('hidden');
+  } else {
+    box.className = 'scorebox'; $('#manualWrap').classList.remove('hidden'); mi.classList.toggle('hidden', !man);
+    let html = sum + r === 0 ? '-' : fmtN(auto) + ' 点';
+    if (man && mi.value !== '' && Number(mi.value) !== auto) html += '<div style="font-size:13px"><span class="badge b-warn">手入力値と自動計算が不一致</span></div>';
+    box.innerHTML = html;
+  }
+}
+async function saveRecord(rec) {
+  if (!registered()) { alert('先にマイデータでプレイヤー登録をしてください。'); go('mydata'); return; }
+  if (state.pick.title && !state.pick.songId) { alert('難易度を選択してください。'); return; }
+  const songId = state.pick.songId || null, s = getSong(songId);
+  const g = n0($('#good').value), o = n0($('#ok').value), b = n0($('#bad').value), r = n0($('#roll').value);
+  if (g + o + b === 0) { alert('良・可・不可の数を入力してください。'); return; }
+  if (s && s.maxCombo && g + o + b !== s.maxCombo &&
+      !confirm(`良・可・不可の合計（${g + o + b}）が最大コンボ数（${s.maxCombo}）と一致しません。このまま保存しますか？`)) return;
+  const auto = s && s.shoko ? calcScore(s.shoko, g, o, r) : null;
+  const manualOn = $('#manual').checked || auto == null;
+  const mv = $('#scoreManual').value.trim();
+  let score, source, mismatch = false;
+  if (auto != null && !manualOn) { score = auto; source = 'auto'; }
+  else if (mv !== '') { score = n0(mv); source = 'manual'; mismatch = auto != null && score !== auto; }
+  else if (auto != null) { score = auto; source = 'auto'; }
+  else { if (!confirm('スコアが未入力です。スコアなしで保存しますか？')) return; score = null; source = 'none'; }
+  const pv = $('#playedAt').value, pd = pv ? new Date(pv) : new Date();
+  const playedAt = isoLocal(isNaN(pd) ? new Date() : pd), now = isoLocal();
+  const data = { songId, good: g, ok: o, bad: b, roll: r, score, scoreSource: source, mismatch, playedAt, updatedAt: now };
+  const photo = state.photo;
+  $('#saveBtn').disabled = true;
+  let target;
+  if (rec) { Object.assign(rec, data); target = rec; }
+  else {
+    target = { id: newRecordId(), ...data, createdAt: now, deleted: false, photoId: null, status: 'ok', localPhoto: false, _sv: null };
+    db.records.push(target);
+  }
+  if (photo) { await photoStore.set(target.id, photo.b64); target.localPhoto = true; }
+  save(); state.photo = null;
+  if (rec) { leaveEdit(); toast('変更を保存しました'); go('history'); }
+  else { state.lastSaved = target.id; toast(photo ? '記録しました（写真付き）' : '記録しました'); render(); window.scrollTo(0, 0); }
+  scheduleSync(200);
+}
+function editRec(id) {
+  const r = db.records.find(x => x.id === id); if (!r) return;
+  if (!state.editId) state.newPick = { ...state.pick };
+  const s = getSong(r.songId);
+  state.pick = { title: s ? s.title : null, songId: r.songId || '' };
+  state.editId = id; state.lastSaved = null; state.view = 'input'; render(); window.scrollTo(0, 0);
+}
+function delRec(id) {
+  const r = db.records.find(x => x.id === id); if (!r) return;
+  if (!confirm('この記録を削除しますか？')) return;
+  r.deleted = true; r.updatedAt = isoLocal(); save(); render(); toast('削除しました'); scheduleSync();
+}
+
+/* ===================== 履歴画面 ===================== */
+function viewHistory() {
+  const recs = activeRecs();
+  const groups = new Map();
+  for (const r of recs) {
+    const k = r.songId || '';
+    let g = groups.get(k);
+    if (!g) { g = { key: k, count: 0, best: null, rankBest: null, last: 0 }; groups.set(k, g); }
+    g.count++;
+    if (r.score != null && (g.best == null || r.score > g.best)) g.best = r.score;
+    if (r.score != null && rankState(r) === 'ok' && (g.rankBest == null || r.score > g.rankBest)) g.rankBest = r.score;
+    g.last = Math.max(g.last, ts(r.playedAt));
+  }
+  const garr = [...groups.values()].sort((a, b) => b.last - a.last);
+  if (state.histSong !== 'all' && !groups.has(state.histSong)) state.histSong = 'all';
+  const f = state.histSong;
+  const list = recs.filter(r => f === 'all' || (r.songId || '') === f).sort((a, b) => ts(b.playedAt) - ts(a.playedAt));
+  let summary = '';
+  if (!recs.length) summary = '<div class="muted">まだ記録がありません。</div>';
+  else if (f === 'all') {
+    summary = `<div class="list">` + garr.map(g => `<div class="item tap" onclick="state.histSong='${esc(g.key)}';render()">
+      <div class="row between"><span>${esc(songName(getSong(g.key)))}</span><span class="num" style="font-weight:800">${fmtN(g.best)}</span></div>
+      <div class="muted">${g.count}回プレイ・最終 ${fmtDate(new Date(g.last))}${g.rankBest != null ? `・📷対象ベスト ${fmtN(g.rankBest)}` : ''}</div></div>`).join('') + `</div>`;
+  } else {
+    const sc = list.filter(r => r.score != null).map(r => r.score);
+    const notes = list.reduce((a, r) => a + r.good + r.ok + r.bad, 0), goods = list.reduce((a, r) => a + r.good, 0);
+    const gb = groups.get(f);
+    summary = `<div class="stats">
+      <div><span class="muted">プレイ回数</span><b>${list.length}</b></div>
+      <div><span class="muted">自己ベスト</span><b>${fmtN(sc.length ? Math.max(...sc) : null)}</b></div>
+      <div><span class="muted">ランキング対象ベスト</span><b>${fmtN(gb ? gb.rankBest : null)}</b></div>
+      <div><span class="muted">平均スコア</span><b>${fmtN(sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : null)}</b></div>
+      <div><span class="muted">平均良率</span><b>${notes ? (goods / notes * 100).toFixed(2) + '%' : '-'}</b></div>
+      <div><span class="muted">最少不可</span><b>${Math.min(...list.map(r => r.bad))}</b></div></div>`;
+  }
+  $('#view').innerHTML = `
+  <div class="card">
+    <h2>${f === 'all' ? '譜面別ベスト' : esc(songName(getSong(f)))}</h2>
+    ${recs.length ? `<select id="hf" style="margin-bottom:10px"><option value="all">すべての譜面</option>${garr.map(g => `<option value="${esc(g.key)}"${f === g.key ? ' selected' : ''}>${esc(songName(getSong(g.key)))}（${g.count}回）</option>`).join('')}</select>` : ''}
+    ${summary}
+  </div>
+  ${list.length ? `<div class="card"><h2>プレイ記録（${list.length}件）</h2><div class="list">${list.map(r => recItem(r, groups.get(r.songId || '')?.best)).join('')}</div></div>` : ''}`;
+  const hf = $('#hf'); if (hf) hf.onchange = () => { state.histSong = hf.value; render(); };
+}
+function recItem(r, best) {
+  const s = getSong(r.songId), st = rankState(r);
+  const badges = (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
+    (r.mismatch ? '<span class="badge b-warn">自動計算と不一致</span>' : '') +
+    (r.scoreSource === 'none' ? '<span class="badge b-warn">スコアなし</span>' : '') +
+    (s && best != null && r.score === best ? '<span class="badge b-best">自己ベスト</span>' : '') +
+    (st === 'ok' ? '<span class="badge b-ok">📷 ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">📷 送信待ち</span>' :
+     st === 'rejected' ? '<span class="badge b-ng">却下</span>' : '<span class="badge b-mute">写真なし</span>') +
+    (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '');
+  return `<div class="item">
+    <div class="row between"><strong>${esc(songName(s))}${s && s.deleted ? '<span class="badge b-warn">削除済み譜面</span>' : ''}</strong><span class="num" style="font-weight:800">${fmtN(r.score)}</span></div>
+    <div class="muted num">${fmtDate(r.playedAt)}　<span class="j-good">良${r.good}</span> <span class="j-ok">可${r.ok}</span> <span class="j-bad">不可${r.bad}</span> <span class="j-roll">連打${r.roll}</span></div>
+    <div style="margin-top:2px">${badges}</div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn sub small" onclick="editRec('${r.id}')">${st === 'none' ? '📷 写真を追加・編集' : '編集'}</button>
+      <button class="btn sub small danger" onclick="delRec('${r.id}')">削除</button></div></div>`;
+}
+
+/* ===================== 楽曲画面 ===================== */
+function viewSongs() {
+  const f = state.songForm, gm = groupMap();
+  $('#view').innerHTML = `
+  ${f ? songFormHtml(f) : `<button class="btn" id="sOpen" style="margin:0 0 12px">＋ 新しい楽曲を追加</button>`}
+  <div class="card">
+    <h2>楽曲リスト（${gm.size}曲・${activeSongs().length}譜面）</h2>
+    <input id="sq" type="search" placeholder="曲名・ジャンルで絞り込み" value="${esc(state.songQ)}" autocomplete="off">
+    <div class="muted" style="margin-top:6px">楽曲リストは全員で共有されます。管理者が登録した譜面は編集できませんが、「＋追加」で難易度を追加できます。</div>
+    <div id="songList" class="list" style="margin-top:10px"></div>
+  </div>`;
+  if (f) bindSongForm(f); else $('#sOpen').onclick = () => openSongForm({ mode: 'newSong' });
+  $('#sq').oninput = e => { state.songQ = e.target.value; renderSongList(); };
+  renderSongList();
+}
+function openSongForm(f) { state.songForm = f; render(); window.scrollTo(0, 0); }
+function renderSongList() {
+  const t = state.songQ.trim().toLowerCase();
+  const cnt = new Map(); for (const r of activeRecs()) if (r.songId) cnt.set(r.songId, (cnt.get(r.songId) || 0) + 1);
+  const gs = [...groupMap().values()].filter(g => !t || (g.title + ' ' + g.genre).toLowerCase().includes(t));
+  const box = $('#songList');
+  box.innerHTML = gs.length ? gs.slice(0, 200).map(g => {
+    const n = g.charts.reduce((a, c) => a + (cnt.get(c.id) || 0), 0);
+    const editable = g.charts.every(canEditSong);
+    return `<div class="item" data-t="${esc(g.title)}">
+      <div class="row between" style="flex-wrap:nowrap"><div style="min-width:0"><strong>${esc(g.title)}</strong>
+      <div class="muted">${genreTag(g.genre)} 自分の記録${n}件</div></div>
+      ${editable ? '<button type="button" class="btn sub small" data-group="1">曲情報</button>' : ''}</div>
+      ${courseButtons(g, null, 'edit')}</div>`;
+  }).join('') + (gs.length > 200 ? `<div class="muted">ほか${gs.length - 200}曲は絞り込んでください</div>` : '')
+    : '<div class="muted">楽曲がありません。</div>';
+  box.querySelectorAll('.item[data-t]').forEach(item => {
+    const title = item.dataset.t;
+    const gb = item.querySelector('[data-group]'); if (gb) gb.onclick = () => openSongForm({ mode: 'editGroup', title });
+    item.querySelectorAll('.cbtn[data-id]').forEach(b => b.onclick = () => {
+      const s = getSong(b.dataset.id);
+      if (s && canEditSong(s)) openSongForm({ mode: 'editChart', title, id: b.dataset.id });
+      else toast('管理者が登録した譜面は編集できません');
+    });
+    item.querySelectorAll('.cbtn[data-add]').forEach(b => b.onclick = () => openSongForm({ mode: 'addChart', title, course: b.dataset.add }));
+  });
+}
+function songFormHtml(f) {
+  const gm = groupMap();
+  if (f.mode === 'editGroup') {
+    const g = gm.get(f.title);
+    return `<div class="card"><h2>曲情報を編集</h2>
+      <label>楽曲名</label><input id="gTitle" value="${esc(f.title)}" autocomplete="off">
+      <label>ジャンル</label><input id="gGenre" list="genres" value="${esc(g ? g.genre : '')}" autocomplete="off">${genreList()}
+      <div class="muted" style="margin-top:6px">この曲のすべての難易度に反映されます。</div>
+      <button class="btn" id="gSave">保存</button>
+      <button class="btn sub danger" id="gDel">この曲を難易度ごとすべて削除</button>
+      <button class="btn sub" id="fCancel">キャンセル</button></div>`;
+  }
+  const ed = f.mode === 'editChart' ? getSong(f.id) : null;
+  const g = f.title ? gm.get(f.title) : null;
+  const used = new Set(g ? g.charts.filter(c => !ed || c.id !== ed.id).map(c => c.course) : []);
+  const allowed = COURSE_ORDER.filter(c => !used.has(c));
+  const course = ed ? ed.course : (f.course && allowed.includes(f.course) ? f.course : (allowed.includes('oni') ? 'oni' : allowed[0]));
+  const level = ed ? ed.level : 10;
+  const tier = ed && ed.subLevel ? ed.subLevel.tier : '', tag = ed && ed.subLevel ? ed.subLevel.tag : 'jiriki';
+  const sv = k => ed ? (ed[k] ?? '') : '';
+  const head = f.mode === 'newSong'
+    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off"><label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off">${genreList()}`
+    : `<div class="picked"${gcStyle(g && g.genre)}><div><strong>${esc(f.title)}</strong>${genreTag(g && g.genre)}</div></div>`;
+  return `<div class="card"><h2>${{ newSong: '新しい楽曲を追加', addChart: '難易度を追加', editChart: '難易度を編集' }[f.mode]}</h2>
+    ${head}
+    <div class="grid2">
+      <div><label>コース</label><select id="sCourse">${allowed.map(c => `<option value="${c}"${c === course ? ' selected' : ''}>${COURSES[c]}</option>`).join('')}</select></div>
+      <div><label>難易度</label><select id="sLevel">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}"${n === level ? ' selected' : ''}>★${n}</option>`).join('')}</select></div>
+    </div>
+    <div id="subWrap">
+      <label>★10 細分（全良難易度表）</label>
+      <select id="sTier"><option value="">未分類</option>${TIERS.map(t => `<option value="${t}"${t === tier ? ' selected' : ''}>${t}</option>`).join('')}</select>
+      <div id="tagWrap" class="seg">
+        <label><input type="radio" name="sTag" value="jiriki"${tag !== 'kojinsa' ? ' checked' : ''}> 地力</label>
+        <label><input type="radio" name="sTag" value="kojinsa"${tag === 'kojinsa' ? ' checked' : ''}> 個人差</label>
+      </div>
+    </div>
+    <div class="grid2">
+      <div><label>最大コンボ数</label><input id="sCombo" type="number" inputmode="numeric" min="0" value="${sv('maxCombo')}"></div>
+      <div><label>初項（良1回の点）</label><input id="sShoko" type="number" inputmode="numeric" min="0" value="${sv('shoko')}" placeholder="不明なら空欄"></div>
+    </div>
+    <div class="muted" style="margin-top:6px">初項を登録した難易度だけ、スコアを自動計算します。</div>
+    <button class="btn" id="sSave">${ed ? '変更を保存' : '追加する'}</button>
+    ${ed ? '<button class="btn sub danger" id="sDel">この難易度を削除</button>' : ''}
+    <button class="btn sub" id="fCancel">キャンセル</button></div>`;
+}
+function bindSongForm(f) {
+  $('#fCancel').onclick = () => { state.songForm = null; render(); };
+  if (f.mode === 'editGroup') { $('#gSave').onclick = () => saveGroup(f); $('#gDel').onclick = () => delGroup(f.title); return; }
+  const toggle = () => {
+    const lv = Number($('#sLevel').value), t = $('#sTier').value;
+    $('#subWrap').classList.toggle('hidden', lv !== 10);
+    $('#tagWrap').classList.toggle('hidden', !(lv === 10 && TAGGED.has(t)));
+  };
+  $('#sLevel').onchange = toggle; $('#sTier').onchange = toggle; toggle();
+  $('#sSave').onclick = () => saveChart(f);
+  if ($('#sDel')) $('#sDel').onclick = () => delChart(f.id);
+}
+function saveChart(f) {
+  const ed = f.mode === 'editChart' ? getSong(f.id) : null;
+  let title, genre;
+  if (f.mode === 'newSong') {
+    title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim();
+    if (!title) { alert('楽曲名を入力してください。'); return; }
+    const g = groupMap().get(title);
+    if (g) { if (!confirm(`「${title}」はすでに登録されています。この曲に難易度として追加しますか？`)) return; genre = g.genre || genre; }
+  } else { title = f.title; const g = groupMap().get(title); genre = (g && g.genre) || (ed && ed.genre) || ''; }
+  const course = $('#sCourse').value;
+  if (!course) { alert('追加できるコースがありません。'); return; }
+  if (activeSongs().find(s => s.title === title && s.course === course && (!ed || s.id !== ed.id))) { alert(`「${title}」には${COURSES[course]}がすでに登録されています。`); return; }
+  const level = Number($('#sLevel').value), tier = $('#sTier').value, tagEl = document.querySelector('input[name="sTag"]:checked');
+  let subLevel = null;
+  if (level === 10 && tier) subLevel = { tier, tag: tier === 'SS' ? null : tier === 'F' ? 'jiriki' : (tagEl ? tagEl.value : 'jiriki') };
+  const shoko = nn($('#sShoko').value), maxCombo = nn($('#sCombo').value);
+  if (shoko != null && shoko % 10 !== 0 && !confirm('初項は通常10点単位です。このまま保存しますか？')) return;
+  const data = { title, genre, course, level, subLevel, maxCombo, shoko, updatedAt: isoLocal() };
+  if (ed) Object.assign(ed, data);
+  else db.songs.push({ id: newSongId(), ...data, createdBy: me(), createdAt: data.updatedAt, deleted: false, _sv: null });
+  save(); state.songForm = null; toast(ed ? '難易度を更新しました' : '追加しました'); render(); scheduleSync();
+}
+function saveGroup(f) {
+  const newT = $('#gTitle').value.trim(), genre = $('#gGenre').value.trim();
+  if (!newT) { alert('楽曲名を入力してください。'); return; }
+  const gm = groupMap(), old = gm.get(f.title);
+  if (!old) { state.songForm = null; render(); return; }
+  const target = newT !== f.title ? gm.get(newT) : null;
+  if (target) {
+    if (old.charts.some(c => target.charts.some(d => d.course === c.course))) { alert(`「${newT}」に同じコースがあるため、まとめられません。`); return; }
+    if (!confirm(`「${newT}」がすでにあります。この曲とまとめますか？`)) return;
+  }
+  const now = isoLocal();
+  old.charts.forEach(c => { c.title = newT; c.genre = genre; c.updatedAt = now; });
+  if (state.pick.title === f.title) state.pick.title = newT;
+  if (state.newPick && state.newPick.title === f.title) state.newPick.title = newT;
+  save(); state.songForm = null; toast('曲情報を更新しました'); render(); scheduleSync();
+}
+function delChart(id) {
+  const s = getSong(id); if (!s) return;
+  const n = activeRecs().filter(r => r.songId === id).length;
+  if (!confirm(`${songName(s)}を削除しますか？` + (n ? `\n記録${n}件はそのまま残ります。` : ''))) return;
+  s.deleted = true; s.updatedAt = isoLocal();
+  if (state.pick.songId === id) state.pick.songId = '';
+  save(); state.songForm = null; toast('削除しました'); render(); scheduleSync();
+}
+function delGroup(title) {
+  const g = groupMap().get(title); if (!g) return;
+  const ids = new Set(g.charts.map(c => c.id));
+  const n = activeRecs().filter(r => ids.has(r.songId)).length;
+  if (!confirm(`「${title}」の全${g.charts.length}譜面を削除しますか？` + (n ? `\n記録${n}件はそのまま残ります。` : ''))) return;
+  const now = isoLocal(); g.charts.forEach(c => { c.deleted = true; c.updatedAt = now; });
+  if (state.pick.title === title) state.pick = { title: null, songId: '' };
+  save(); state.songForm = null; toast('削除しました'); render(); scheduleSync();
+}
+
+/* ===================== マイデータ画面 ===================== */
+function viewMyData() {
+  const recN = activeRecs().length, n = pendingCount();
+  const regCard = registered() ? `
+  <div class="card">
+    <h2>プレイヤー情報</h2>
+    <div class="muted">プレイヤーID</div><div style="font-size:18px;font-weight:800">@${esc(db.player.id)}</div>
+    <label>表示名（ランキング表示用）</label>
+    <input id="pname" value="${esc(db.player.name)}" maxlength="20" autocomplete="off">
+    <button class="btn" id="nameSave">表示名を保存</button>
+    ${API_URL ? `<h3>引き継ぎコード</h3>
+    <div class="muted">機種変更などで別の端末から使うときに必要です。他人に教えないでください。</div>
+    <div class="row" style="margin-top:6px"><button class="btn sub small" id="showCode">表示する</button><button class="btn sub small" id="copyCode">コピー</button></div>
+    <div id="codeBox" class="code hidden">${esc(db.player.token)}</div>` : ''}
+  </div>` : `
+  <div class="card">
+    <h2>プレイヤー登録</h2>
+    <div class="muted">はじめて使う端末で一度だけ行います。${API_URL ? '登録には通信が必要です。' : ''}</div>
+    <label>プレイヤーID（半角英小文字・数字・_、最大12文字。あとから変更できません）</label>
+    <input id="pid" maxlength="12" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(db.player.id)}">
+    <label>表示名（ランキング表示用、あとから変更できます）</label>
+    <input id="pname" maxlength="20" autocomplete="off" value="${esc(db.player.name)}">
+    <button class="btn" id="regBtn">登録する</button>
+  </div>
+  ${API_URL ? `<div class="card">
+    <h2>別の端末から引き継ぐ</h2>
+    <div class="muted">以前の端末の「マイデータ」に表示される引き継ぎコードを入力すると、記録がこの端末に戻ります。</div>
+    <label>プレイヤーID</label><input id="tid" maxlength="12" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+    <label>引き継ぎコード</label><input id="tcode" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false">
+    <button class="btn sub" id="takeBtn">引き継ぐ</button>
+    <div class="muted" style="margin-top:6px">コードが分からない場合は、管理者にリセットを依頼してから同じIDで登録し直してください。</div>
+  </div>` : ''}`;
+
+  $('#view').innerHTML = regCard + `
+  ${API_URL ? `<div class="card">
+    <h2>送信状況</h2>
+    <div class="muted">記録 ${recN}件／未送信 ${n}件／最終同期 ${db.lastSyncAt ? fmtDate(db.lastSyncAt) : 'なし'}</div>
+    ${syncSt.error ? `<div class="muted" style="color:var(--danger)">${esc(syncSt.error)}</div>` : ''}
+    <button class="btn sub" id="syncBtn">今すぐ同期</button>
+  </div>` : ''}
+  <div class="card">
+    <h2>バックアップ</h2>
+    <div class="muted">普段は自動で送信されるので操作は不要です。念のための保存や、旧バージョンのデータ取り込みに使います。</div>
+    <button class="btn sub" id="exFile">バックアップを書き出す</button>
+    <label>バックアップ・旧バージョンのデータを読み込む</label>
+    <input type="file" id="imFile" accept=".json,application/json,text/plain">
+  </div>
+  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.0・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
+
+  if (registered()) {
+    $('#nameSave').onclick = saveName;
+    if ($('#showCode')) {
+      $('#showCode').onclick = () => $('#codeBox').classList.toggle('hidden');
+      $('#copyCode').onclick = () => copyText(`ID: ${db.player.id}\n引き継ぎコード: ${db.player.token}`);
+    }
+  } else {
+    const pid = $('#pid');
+    pid.oninput = () => { const v = pid.value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 12); if (v !== pid.value) pid.value = v; };
+    $('#regBtn').onclick = doRegister;
+    if ($('#takeBtn')) {
+      const tid = $('#tid');
+      tid.oninput = () => { const v = tid.value.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 12); if (v !== tid.value) tid.value = v; };
+      $('#takeBtn').onclick = doTakeover;
+    }
+  }
+  if ($('#syncBtn')) $('#syncBtn').onclick = () => runSync(true);
+  $('#exFile').onclick = () => {
+    const o = { app: APP, schema: SCHEMA, player: { id: db.player.id, name: db.player.name, deviceId: db.player.deviceId },
+      exportedAt: isoLocal(), songs: db.songs, records: db.records };
+    download(`taiko_${db.player.id || 'noid'}_${ymd(new Date())}.json`, JSON.stringify(o, null, 2));
+    db.lastExportAt = o.exportedAt; save();
+  };
+  $('#imFile').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { let o; try { o = JSON.parse(String(rd.result)); } catch (er) { alert('読み込めないファイルです。'); return; } importData(o); e.target.value = ''; };
+    rd.readAsText(f);
+  };
+}
+async function doRegister() {
+  const id = $('#pid').value, name = $('#pname').value.trim();
+  if (!id) { alert('プレイヤーIDを入力してください。'); return; }
+  if (!API_URL) {
+    db.player.id = id; db.player.name = name; claimLocalSongs(); save(); toast('この端末に登録しました'); render(); return;
+  }
+  const btn = $('#regBtn'); btn.disabled = true; btn.textContent = '登録中…';
+  try {
+    const r = await api('register', { playerId: id, name, deviceId: db.player.deviceId });
+    db.player.id = id; db.player.name = name || id; db.player.token = r.token;
+    claimLocalSongs(); syncSt.authError = false; save();
+    toast('登録しました'); render(); runSync(false);
+  } catch (e) {
+    alert(e.code === 'taken' ? 'このIDはすでに使われています。\n別のIDにするか、以前の端末の記録を使う場合は「別の端末から引き継ぐ」を使ってください。' : e.message);
+    btn.disabled = false; btn.textContent = '登録する';
+  }
+}
+/** 登録前に追加した楽曲を自分のものにする */
+function claimLocalSongs() { db.songs.forEach(s => { if (!s.createdBy && !s._sv) s.createdBy = db.player.id; }); }
+async function doTakeover() {
+  const id = $('#tid').value, code = $('#tcode').value.trim();
+  if (!id || !code) { alert('プレイヤーIDと引き継ぎコードを入力してください。'); return; }
+  const btn = $('#takeBtn'); btn.disabled = true; btn.textContent = '確認中…';
+  try {
+    const r = await api('getMine', { playerId: id, token: code });
+    db.player.id = id; db.player.token = code; db.player.name = (r.player && r.player.name) || id;
+    mergeMine(r.records); claimLocalSongs(); syncSt.authError = false; save();
+    toast(`引き継ぎました（記録${(r.records || []).length}件）`); render(); runSync(false);
+  } catch (e) {
+    alert(e.code === 'auth' ? 'プレイヤーIDまたは引き継ぎコードが違います。' : e.message);
+    btn.disabled = false; btn.textContent = '引き継ぐ';
+  }
+}
+async function saveName() {
+  const name = $('#pname').value.trim() || db.player.id;
+  db.player.name = name; save(); refreshChrome();
+  if (!API_URL || !db.player.token) { toast('保存しました'); return; }
+  try { await api('updateName', { playerId: db.player.id, token: db.player.token, name }); toast('保存しました'); }
+  catch (e) { toast('この端末には保存しました（サーバーへは次回送信）'); }
+}
+function importData(o) {
+  if (!o || o.app !== APP) { alert('このツールのデータではありません。'); return; }
+  if ((o.schema || 1) > SCHEMA) { alert('新しいバージョンのデータです。ページを再読み込みしてください。'); return; }
+  const inSongs = (o.songs || []).map(normSong).filter(Boolean);
+  const inRecs = (o.records || []).map(normRec).filter(Boolean);
+  const ipid = o.player && typeof o.player.id === 'string' ? o.player.id : '';
+  let takeRecs = inRecs.length > 0;
+  if (takeRecs && ipid && db.player.id && ipid !== db.player.id) {
+    if (!confirm(`別のプレイヤー（${ipid}）のデータです。記録は取り込まず、楽曲データのみ取り込みますか？`)) return;
+    takeRecs = false;
+  }
+  const key = s => s.title + '\u0000' + s.course;
+  const localByKey = new Map(db.songs.filter(s => !s.deleted).map(s => [key(s), s]));
+  const remap = {};
+  let sa = 0, ra = 0;
+  for (const s of inSongs) {
+    if (getSong(s.id)) continue;
+    const same = localByKey.get(key(s));
+    if (same) { remap[s.id] = same.id; continue; }
+    db.songs.push({ ...s, createdBy: me(), _sv: null }); sa++;
+  }
+  if (takeRecs) for (const r of inRecs) {
+    if (db.records.some(x => x.id === r.id)) continue;
+    if (r.songId && remap[r.songId]) r.songId = remap[r.songId];
+    r._sv = null; r.photoId = null; r.localPhoto = false; r.status = 'ok';
+    db.records.push(r); ra++;
+  }
+  save(); render(); scheduleSync();
+  alert(`読み込みました。\n譜面: 追加 ${sa}件` + (takeRecs ? `\n記録: 追加 ${ra}件` : '') + (API_URL ? '\n（このあと自動でサーバーに送信します）' : ''));
+}
+
+/* ===================== 起動 ===================== */
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => go(b.dataset.v));
+window.addEventListener('online', () => scheduleSync(300));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
+load();
+render();
+scheduleSync(100);
+setInterval(() => { if (pendingCount() && !syncSt.running) runSync(false); }, 60000);
+</script>
+</body>
+</html>

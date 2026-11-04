@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>太鼓スコア記録 管理者</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  main{padding-bottom:40px}
+  .evrow{display:flex;justify-content:space-between;gap:10px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:4px;font-size:13px;border:1.5px solid var(--cc);border-radius:16px;padding:2px 4px 2px 10px;margin:3px 4px 0 0}
+  .chip b{color:var(--cc)}
+  .chip button{border:0;background:none;color:var(--muted);font-size:15px;cursor:pointer;padding:0 4px}
+  .rk{font-weight:800;width:36px}
+  .rk1{color:#d4a017}.rk2{color:#8f9aa6}.rk3{color:#b9733a}
+</style>
+</head>
+<body>
+<header><h1>太鼓スコア記録 管理者</h1><div class="who"><div id="who"></div><span class="pill tap" id="reload">再読み込み</span></div></header>
+<main class="wide"><div id="banners"></div><div id="view"></div></main>
+<div class="toast" id="toast"></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+const KEY_LS = 'taikoAdminKey';
+let adminKey = '';
+try { adminKey = localStorage.getItem(KEY_LS) || ''; } catch (e) {}
+let D = null; // { players, songs, records, events, photoFolderUrl }
+const st = { tab: 'rank', rankMode: 'event', rankEvent: '', rankChart: '', detail: null, eventForm: null, evQ: '', songForm: null, songQ: '' };
+const photoCache = new Map();
+
+const getSong = id => id && D ? (D.songs.find(s => s.id === id) || null) : null;
+const groupMap = () => groupSongs(D.songs);
+const pname = id => { const p = D.players.find(x => x.id === id); return p ? (p.name || p.id) : id; };
+const recs = () => D.records.filter(r => !r.deleted);
+const liveEvents = () => D.events.filter(e => !e.deleted).sort((a, b) => ts(b.start) - ts(a.start));
+const newSongId = () => { let id; do { id = 's_' + rand(8).toLowerCase(); } while (D.songs.some(s => s.id === id)); return id; };
+
+/* ===================== 読み込み ===================== */
+async function loadAll() {
+  $('#who').textContent = '読み込み中…';
+  try {
+    D = await api('adminGetAll', { adminKey }, 60000);
+    try { localStorage.setItem(KEY_LS, adminKey); } catch (e) {}
+    if (!st.rankEvent) { const act = liveEvents().find(e => eventActive(e)) || liveEvents()[0]; st.rankEvent = act ? act.id : ''; }
+    render();
+  } catch (e) {
+    if (e.code === 'admin') { adminKey = ''; try { localStorage.removeItem(KEY_LS); } catch (er) {} }
+    D = null; render(); toast(e.message, 3000);
+  }
+}
+function render() {
+  $('#who').textContent = D ? `プレイヤー${D.players.length}人・記録${recs().length}件` : '';
+  $('#banners').innerHTML = !API_URL ? `<div class="banner err">config.js にサーバーURLが設定されていません。</div>` : '';
+  if (!D) return viewLogin();
+  const tabs = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー']];
+  $('#view').innerHTML = `<div class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${st.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="tabBody"></div>`;
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { st.tab = b.dataset.tab; st.detail = null; render(); });
+  ({ rank: viewRank, events: viewEvents, songs: viewSongs, players: viewPlayers })[st.tab]();
+}
+function viewLogin() {
+  $('#view').innerHTML = `<div class="card" style="max-width:480px;margin:40px auto">
+    <h2>管理者ログイン</h2>
+    <div class="muted">GASで「setup」を実行したときにログへ表示された管理者キーを入力してください。この端末に保存されます。</div>
+    <label>管理者キー</label><input id="ak" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(adminKey)}">
+    <button class="btn" id="login">ログイン</button></div>`;
+  $('#login').onclick = () => { adminKey = $('#ak').value.trim(); if (adminKey) loadAll(); };
+}
+
+/* ===================== ランキング ===================== */
+/** 記録がランキング対象か（写真あり・却下でない・スコアあり・期間内） */
+const inPeriod = (r, ev) => !ev || (ts(r.playedAt) >= ts(ev.start) && ts(r.playedAt) <= ts(ev.end));
+const eligible = (r, chartId, ev) => !r.deleted && r.songId === chartId && r.score != null && !!r.photoId && r.status !== 'rejected' && inPeriod(r, ev);
+function rankChart(chartId, ev) {
+  const best = new Map(), plays = new Map();
+  let noPhoto = 0, rejected = 0;
+  for (const r of recs()) {
+    if (r.songId !== chartId || !inPeriod(r, ev)) continue;
+    plays.set(r.playerId, (plays.get(r.playerId) || 0) + 1);
+    if (r.status === 'rejected') rejected++; else if (!r.photoId) noPhoto++;
+    if (!eligible(r, chartId, ev)) continue;
+    const cur = best.get(r.playerId);
+    if (!cur || r.score > cur.score || (r.score === cur.score && ts(r.playedAt) < ts(cur.playedAt))) best.set(r.playerId, r);
+  }
+  const rows = [...best.values()].sort((a, b) => b.score - a.score || ts(a.playedAt) - ts(b.playedAt));
+  withRanks(rows, r => r.score);
+  return { rows, plays, noPhoto, rejected };
+}
+/** 同点は同順位（1,1,3…） */
+function withRanks(rows, val) { rows.forEach((r, i) => { r._rank = i > 0 && val(rows[i - 1]) === val(r) ? rows[i - 1]._rank : i + 1; }); return rows; }
+function rankTotal(ev) {
+  const ids = (ev.chartIds || []).filter(getSong);
+  const per = ids.map(id => rankChart(id, ev));
+  const tot = new Map();
+  per.forEach(res => res.rows.forEach(r => {
+    const t = tot.get(r.playerId) || { playerId: r.playerId, sum: 0, n: 0 };
+    t.sum += r.score; t.n++; tot.set(r.playerId, t);
+  }));
+  const rows = [...tot.values()].sort((a, b) => b.sum - a.sum || b.n - a.n);
+  return { rows: withRanks(rows, r => r.sum + '/' + r.n), total: ids.length };
+}
+function viewRank() {
+  const evs = liveEvents();
+  const ev = st.rankMode === 'event' ? D.events.find(e => e.id === st.rankEvent && !e.deleted) : null;
+  const chartsWithRecs = [...new Set(recs().filter(r => r.songId).map(r => r.songId))].map(getSong).filter(Boolean).sort(songSort);
+  if (st.rankMode === 'all' && !st.rankChart && chartsWithRecs[0]) st.rankChart = chartsWithRecs[0].id;
+  let body = '';
+  if (st.rankMode === 'event') {
+    if (!ev) body = `<div class="card muted">大会がありません。「大会」タブで作成してください。</div>`;
+    else {
+      const total = rankTotal(ev);
+      body = `<div class="card"><div class="evrow"><div><h2 style="margin:0">${esc(ev.name)} <span class="badge ${eventState(ev) === '開催中' ? 'b-ok' : 'b-mute'}">${eventState(ev)}</span></h2>
+        <div class="muted">${fmtDate(ev.start)} 〜 ${fmtDate(ev.end)}・課題${total.total}譜面</div></div>
+        <button class="btn small" data-img="total">総合の画像</button></div>
+        ${total.total > 1 ? `<h3>総合（課題譜面のランキング対象ベストの合計）</h3>${totalTable(total)}` : ''}</div>` +
+        (ev.chartIds || []).map(getSong).filter(Boolean).map(s => chartCard(s, ev)).join('');
+    }
+  } else {
+    const s = getSong(st.rankChart);
+    body = s ? chartCard(s, null) : `<div class="card muted">まだ記録がありません。</div>`;
+  }
+  $('#tabBody').innerHTML = `
+  <div class="card">
+    <div class="seg" style="margin-top:0">
+      <label><input type="radio" name="rm" value="event"${st.rankMode === 'event' ? ' checked' : ''}> 大会ランキング</label>
+      <label><input type="radio" name="rm" value="all"${st.rankMode === 'all' ? ' checked' : ''}> 常設ランキング（全期間）</label>
+    </div>
+    ${st.rankMode === 'event'
+      ? `<label>大会</label><select id="evSel">${evs.map(e => `<option value="${e.id}"${e.id === st.rankEvent ? ' selected' : ''}>${esc(e.name)}（${eventState(e)}）</option>`).join('')}</select>`
+      : `<label>譜面（記録のある譜面）</label><select id="chSel">${chartsWithRecs.map(s => `<option value="${s.id}"${s.id === st.rankChart ? ' selected' : ''}>${esc(songName(s))} ${esc(lvLabel(s))}</option>`).join('')}</select>`}
+    <div class="muted" style="margin-top:8px">ランキング対象＝写真付き・却下されていない記録（大会は期間内のプレイ日時のもの）。各プレイヤーの最高スコアで順位をつけ、同点は同順位です。</div>
+  </div>
+  ${body}`;
+  document.querySelectorAll('input[name=rm]').forEach(i => i.onchange = () => { st.rankMode = i.value; render(); });
+  if ($('#evSel')) $('#evSel').onchange = e => { st.rankEvent = e.target.value; render(); };
+  if ($('#chSel')) $('#chSel').onchange = e => { st.rankChart = e.target.value; render(); };
+  bindRankActions(ev);
+}
+function totalTable(t) {
+  if (!t.rows.length) return '<div class="muted">まだ対象記録がありません。</div>';
+  return `<div class="tblwrap"><table class="rank"><tr><th>順位</th><th>プレイヤー</th><th class="n">合計</th><th class="n">提出</th></tr>` +
+    t.rows.map(r => `<tr><td class="rk rk${r._rank}">${r._rank}</td><td>${esc(pname(r.playerId))} <span class="muted">@${esc(r.playerId)}</span></td>
+      <td class="n"><b>${fmtN(r.sum)}</b></td><td class="n">${r.n}/${t.total}</td></tr>`).join('') + `</table></div>`;
+}
+function chartCard(s, ev) {
+  const res = rankChart(s.id, ev);
+  const key = s.id;
+  return `<div class="card">
+    <div class="evrow"><div><h2 style="margin:0"><span class="cc-${s.course}" style="color:var(--cc)">${COURSE_SHORT[s.course]}</span> ${esc(s.title)}</h2>
+      <div class="muted">${esc(lvLabel(s))}・対象${res.rows.length}人・写真なし${res.noPhoto}件・却下${res.rejected}件</div></div>
+      <div class="row"><button class="btn sub small" data-detail="${key}">${st.detail === key ? '全記録を閉じる' : '全記録'}</button><button class="btn small" data-img="${key}">画像</button></div></div>
+    ${res.rows.length ? `<div class="tblwrap"><table class="rank"><tr><th>順位</th><th>プレイヤー</th><th class="n">スコア</th><th class="n">良/可/不可/連打</th><th>プレイ日時</th><th class="n">回数</th><th></th></tr>` +
+      res.rows.map(r => `<tr><td class="rk rk${r._rank}">${r._rank}</td><td>${esc(pname(r.playerId))} <span class="muted">@${esc(r.playerId)}</span></td>
+        <td class="n"><b>${fmtN(r.score)}</b>${r.mismatch ? '<span class="badge b-warn">計算不一致</span>' : ''}${r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : ''}</td>
+        <td class="n"><span class="j-good">${r.good}</span>/<span class="j-ok">${r.ok}</span>/<span class="j-bad">${r.bad}</span>/<span class="j-roll">${r.roll}</span></td>
+        <td class="muted">${fmtDate(r.playedAt)}</td><td class="n">${res.plays.get(r.playerId) || 0}</td>
+        <td><div class="row" style="flex-wrap:nowrap"><button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button><button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button></div></td></tr>`).join('') +
+      `</table></div>` : '<div class="muted">まだランキング対象の記録がありません。</div>'}
+    ${st.detail === key ? detailTable(s.id, ev) : ''}
+  </div>`;
+}
+/** 期間内の全記録（写真なし・却下も含む）。却下の取り消しや確認用 */
+function detailTable(chartId, ev) {
+  const list = recs().filter(r => r.songId === chartId && inPeriod(r, ev)).sort((a, b) => (b.score || 0) - (a.score || 0));
+  return `<h3>全記録（${list.length}件）</h3><div class="tblwrap"><table class="rank"><tr><th>プレイヤー</th><th class="n">スコア</th><th class="n">良/可/不可/連打</th><th>日時</th><th>状態</th><th></th></tr>` +
+    list.map(r => `<tr class="${r.status === 'rejected' ? 'rej' : ''}"><td>${esc(pname(r.playerId))}</td><td class="n">${fmtN(r.score)}</td>
+      <td class="n">${r.good}/${r.ok}/${r.bad}/${r.roll}</td><td class="muted">${fmtDate(r.playedAt)}</td>
+      <td>${r.status === 'rejected' ? '<span class="badge b-ng">却下</span>' : r.photoId ? '<span class="badge b-ok">写真あり</span>' : '<span class="badge b-mute">写真なし</span>'}</td>
+      <td><div class="row" style="flex-wrap:nowrap">${r.photoId ? `<button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button>` : ''}
+      ${r.status === 'rejected' ? `<button class="btn sub small" data-status="ok" data-rid="${esc(r.id)}">却下を取消</button>` : `<button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button>`}</div></td></tr>`).join('') +
+    `</table></div>`;
+}
+function bindRankActions(ev) {
+  document.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => { st.detail = st.detail === b.dataset.detail ? null : b.dataset.detail; render(); });
+  document.querySelectorAll('[data-photo]').forEach(b => b.onclick = () => showPhoto(b.dataset.photo, b.dataset.rid));
+  document.querySelectorAll('[data-status]').forEach(b => b.onclick = () => setStatus(b.dataset.rid, b.dataset.status));
+  document.querySelectorAll('[data-img]').forEach(b => b.onclick = () => openImage(b.dataset.img, ev));
+}
+async function showPhoto(photoId, rid) {
+  const r = D.records.find(x => x.id === rid), s = r && getSong(r.songId);
+  const m = showModal(`<h2>${esc(pname(r.playerId))}：${esc(songName(s))}</h2>
+    <div class="muted">登録スコア <b>${fmtN(r.score)}</b>（良${r.good}・可${r.ok}・不可${r.bad}・連打${r.roll}）・${fmtDate(r.playedAt)}</div>
+    <div id="ph" class="muted" style="margin-top:10px">写真を読み込んでいます…</div>
+    <div class="row" style="margin-top:10px">${r.status === 'rejected' ? `<button class="btn sub small" id="mOk">却下を取消</button>` : `<button class="btn sub small danger" id="mNg">この記録を却下</button>`}</div>`, true);
+  const b1 = m.querySelector('#mOk'), b2 = m.querySelector('#mNg');
+  if (b1) b1.onclick = () => { m.remove(); setStatus(rid, 'ok'); };
+  if (b2) b2.onclick = () => { m.remove(); setStatus(rid, 'rejected'); };
+  try {
+    let src = photoCache.get(photoId);
+    if (!src) { const res = await api('adminGetPhoto', { adminKey, photoId }, 60000); src = `data:${res.mime};base64,${res.data}`; photoCache.set(photoId, src); }
+    m.querySelector('#ph').innerHTML = `<img src="${src}" alt="" style="width:100%;border-radius:8px">`;
+  } catch (e) { m.querySelector('#ph').textContent = '写真を読み込めませんでした：' + e.message; }
+}
+async function setStatus(rid, status) {
+  if (status === 'rejected' && !confirm('この記録を却下してランキングから外しますか？（記録自体は消えません）')) return;
+  try {
+    await api('adminSetStatus', { adminKey, recordId: rid, status });
+    const r = D.records.find(x => x.id === rid); if (r) r.status = status;
+    toast(status === 'rejected' ? '却下しました' : '却下を取り消しました'); render();
+  } catch (e) { toast(e.message, 3000); }
+}
+
+/* ----- ランキング画像（1920×1080 PNG） ----- */
+const FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",Meiryo,sans-serif';
+function fitText(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text; while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function drawRanking(o) {
+  const W = 1920, H = 1080, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#1c120e'); g.addColorStop(1, '#3a1b12');
+  x.fillStyle = g; x.fillRect(0, 0, W, H);
+  x.fillStyle = '#d9442b'; x.fillRect(0, 0, W, 14);
+  x.fillStyle = 'rgba(255,255,255,.04)'; for (let i = 0; i < 6; i++) { x.beginPath(); x.arc(W - 160, 150, 120 + i * 70, 0, Math.PI * 2); x.lineWidth = 2; x.strokeStyle = 'rgba(255,255,255,.05)'; x.stroke(); }
+  x.textBaseline = 'alphabetic';
+  x.fillStyle = '#fff'; x.font = `800 60px ${FONT}`; x.fillText(fitText(x, o.title, 1500), 80, 108);
+  let sy = 176;
+  if (o.chart) {
+    const s = o.chart, col = COURSE_COLOR[s.course];
+    x.font = `800 34px ${FONT}`;
+    const cl = COURSE_SHORT[s.course], cw = x.measureText(cl).width + 40;
+    x.fillStyle = col; roundRect(x, 80, sy - 40, cw, 52, 26); x.fill();
+    x.fillStyle = '#fff'; x.fillText(cl, 100, sy - 2);
+    x.font = `700 42px ${FONT}`; x.fillStyle = '#fff';
+    const tl = fitText(x, s.title, 1200), tw = x.measureText(tl).width;
+    x.fillText(tl, 80 + cw + 24, sy);
+    x.font = `600 30px ${FONT}`; x.fillStyle = '#f2c94c'; x.fillText(lvLabel(s), 80 + cw + 24 + tw + 28, sy);
+  } else if (o.subtitle) { x.font = `600 36px ${FONT}`; x.fillStyle = '#e8dcd3'; x.fillText(fitText(x, o.subtitle, 1700), 80, sy); }
+  const rows = o.rows.slice(0, 10), top = 230, rh = 78;
+  if (!rows.length) { x.font = `600 40px ${FONT}`; x.fillStyle = '#bba'; x.fillText('ランキング対象の記録はまだありません', 80, 400); }
+  rows.forEach((r, i) => {
+    const y = top + i * rh;
+    x.fillStyle = i % 2 ? 'rgba(255,255,255,.035)' : 'rgba(255,255,255,.075)'; roundRect(x, 60, y, W - 120, rh - 10, 14); x.fill();
+    const base = y + 50;
+    x.font = `800 46px ${FONT}`; x.fillStyle = r.rank === 1 ? '#f5c542' : r.rank === 2 ? '#d5dde5' : r.rank === 3 ? '#d99058' : '#fff';
+    x.textAlign = 'right'; x.fillText(String(r.rank), 150, base); x.textAlign = 'left';
+    x.font = `700 40px ${FONT}`; x.fillStyle = '#fff'; x.fillText(fitText(x, r.name, 820), 190, base);
+    x.textAlign = 'right';
+    x.font = `500 26px ${FONT}`; x.fillStyle = '#cbbfb6'; x.fillText(r.detail || '', 1470, base - 2);
+    x.font = `800 48px ${FONT}`; x.fillStyle = '#fff'; x.fillText(r.score, W - 90, base + 2);
+    x.textAlign = 'left';
+  });
+  x.font = `500 22px ${FONT}`; x.fillStyle = 'rgba(255,255,255,.5)'; x.textAlign = 'right';
+  x.fillText(o.footer || ('太鼓スコア記録・' + fmtDate(new Date())), W - 70, H - 26); x.textAlign = 'left';
+  if (o.rows.length > 10) { x.font = `500 22px ${FONT}`; x.fillStyle = 'rgba(255,255,255,.5)'; x.fillText(`ほか${o.rows.length - 10}人`, 80, H - 26); }
+  return c;
+}
+function openImage(key, ev) {
+  let opt, fname;
+  const evTitle = ev ? ev.name : '常設ランキング';
+  const period = ev ? `${fmtDate(ev.start)} 〜 ${fmtDate(ev.end)}` : '全期間';
+  if (key === 'total') {
+    const t = rankTotal(ev);
+    opt = { title: `${evTitle}　総合結果`, subtitle: `${period}・課題${t.total}譜面の合計スコア`,
+      rows: t.rows.map(r => ({ rank: r._rank, name: pname(r.playerId), score: fmtN(r.sum), detail: `提出 ${r.n}/${t.total}` })) };
+    fname = `ranking_${ymd(new Date())}_total.png`;
+  } else {
+    const s = getSong(key), res = rankChart(key, ev);
+    opt = { title: evTitle, chart: s, rows: res.rows.map(r => ({ rank: r._rank, name: pname(r.playerId), score: fmtN(r.score), detail: `良${r.good} 可${r.ok} 不可${r.bad}` })),
+      footer: `${period}・太鼓スコア記録` };
+    fname = `ranking_${ymd(new Date())}_${s.title.replace(/[\\/:*?"<>|\s]/g, '_').slice(0, 30)}_${s.course}.png`;
+  }
+  const c = drawRanking(opt);
+  c.className = 'preview';
+  const m = showModal(`<h2>ランキング画像（1920×1080）</h2><div id="cv"></div><button class="btn" id="dl">PNGを保存</button>`, true);
+  m.querySelector('#cv').appendChild(c);
+  m.querySelector('#dl').onclick = () => c.toBlob(b => download(fname, b, 'image/png'), 'image/png');
+}
+
+/* ===================== 大会 ===================== */
+function viewEvents() {
+  const f = st.eventForm;
+  const evs = liveEvents();
+  $('#tabBody').innerHTML = (f ? eventFormHtml(f) : `<button class="btn" id="evNew" style="margin:0 0 12px">＋ 大会を追加</button>`) + `
+  <div class="card"><h2>大会一覧</h2>
+    ${evs.length ? `<div class="list">${evs.map(e => `<div class="item"><div class="evrow"><div>
+      <strong>${esc(e.name)}</strong> <span class="badge ${eventState(e) === '開催中' ? 'b-ok' : 'b-mute'}">${eventState(e)}</span>
+      <div class="muted">${fmtDate(e.start)} 〜 ${fmtDate(e.end)}・課題${(e.chartIds || []).length}譜面</div>
+      <div>${(e.chartIds || []).map(getSong).filter(Boolean).map(s => `<span class="chip cc-${s.course}">${esc(s.title)} <b>${COURSE_SHORT[s.course]}</b>&nbsp;</span>`).join('')}</div></div>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn sub small" data-evrank="${e.id}">ランキング</button><button class="btn sub small" data-evedit="${e.id}">編集</button></div></div></div>`).join('')}</div>`
+      : '<div class="muted">まだ大会はありません。</div>'}
+  </div>`;
+  if (f) bindEventForm(f);
+  else $('#evNew').onclick = () => {
+    const s = new Date(); s.setSeconds(0, 0);
+    const e = new Date(s.getTime() + 14 * 86400000); e.setHours(23, 59, 0, 0);
+    st.eventForm = { id: '', name: '', start: toLocalInput(s), end: toLocalInput(e), note: '', chartIds: new Set() }; render();
+  };
+  document.querySelectorAll('[data-evedit]').forEach(b => b.onclick = () => {
+    const e = D.events.find(x => x.id === b.dataset.evedit);
+    st.eventForm = { id: e.id, name: e.name, start: toLocalInput(new Date(e.start)), end: toLocalInput(new Date(e.end)), note: e.note || '', chartIds: new Set(e.chartIds || []) };
+    render(); window.scrollTo(0, 0);
+  });
+  document.querySelectorAll('[data-evrank]').forEach(b => b.onclick = () => { st.tab = 'rank'; st.rankMode = 'event'; st.rankEvent = b.dataset.evrank; render(); });
+}
+function eventFormHtml(f) {
+  return `<div class="card"><h2>${f.id ? '大会を編集' : '大会を追加'}</h2>
+    <label>大会名</label><input id="evName" value="${esc(f.name)}" maxlength="60" autocomplete="off">
+    <div class="grid2"><div><label>開始</label><input id="evStart" type="datetime-local" value="${f.start}"></div>
+      <div><label>終了</label><input id="evEnd" type="datetime-local" value="${f.end}"></div></div>
+    <label>説明（任意・プレイヤー画面に表示）</label><input id="evNote" value="${esc(f.note)}" maxlength="200" autocomplete="off">
+    <h3 id="evCount">課題譜面（${f.chartIds.size}譜面）</h3>
+    <div id="evChips"></div>
+    <label>楽曲を検索して難易度ボタンで追加／解除</label>
+    <input id="evQ" type="search" placeholder="曲名・ジャンル" value="${esc(st.evQ)}" autocomplete="off">
+    <div id="evList" class="list" style="margin-top:10px;max-height:460px;overflow:auto"></div>
+    <button class="btn" id="evSave">保存</button>
+    ${f.id ? '<button class="btn sub danger" id="evDel">この大会を削除</button>' : ''}
+    <button class="btn sub" id="evCancel">キャンセル</button></div>`;
+}
+function bindEventForm(f) {
+  const keep = () => { f.name = $('#evName').value; f.start = $('#evStart').value; f.end = $('#evEnd').value; f.note = $('#evNote').value; };
+  const chips = () => {
+    $('#evChips').innerHTML = [...f.chartIds].map(getSong).filter(Boolean).map(s =>
+      `<span class="chip cc-${s.course}">${esc(s.title)} <b>${COURSE_SHORT[s.course]}</b><button data-rm="${s.id}" title="外す">×</button></span>`).join('') || '<div class="muted">まだ選ばれていません。</div>';
+    document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { f.chartIds.delete(b.dataset.rm); chips(); list(); });
+    $('#evCount').textContent = `課題譜面（${f.chartIds.size}譜面）`;
+  };
+  const list = () => {
+    const t = st.evQ.trim().toLowerCase();
+    const gs = [...groupMap().values()].filter(g => !t || (g.title + ' ' + g.genre).toLowerCase().includes(t)).slice(0, 40);
+    $('#evList').innerHTML = gs.map(g => `<div class="item"><strong>${esc(g.title)}</strong> ${genreTag(g.genre)}${courseButtons(g, f.chartIds, 'pick')}</div>`).join('') || '<div class="muted">該当する楽曲がありません。</div>';
+    document.querySelectorAll('#evList .cbtn[data-id]').forEach(b => b.onclick = () => {
+      const id = b.dataset.id; if (f.chartIds.has(id)) f.chartIds.delete(id); else f.chartIds.add(id);
+      chips(); list();
+    });
+  };
+  chips(); list();
+  $('#evQ').oninput = e => { st.evQ = e.target.value; list(); };
+  $('#evCancel').onclick = () => { st.eventForm = null; render(); };
+  $('#evSave').onclick = async () => {
+    keep();
+    if (!f.name.trim()) { alert('大会名を入力してください。'); return; }
+    const s = new Date(f.start), e = new Date(f.end);
+    if (isNaN(s) || isNaN(e) || e <= s) { alert('期間を正しく入力してください（終了は開始より後）。'); return; }
+    if (!f.chartIds.size) { alert('課題譜面を1つ以上選んでください。'); return; }
+    await saveEvent({ id: f.id, name: f.name.trim(), start: isoLocal(s), end: isoLocal(e), note: f.note.trim(), chartIds: [...f.chartIds] });
+  };
+  if ($('#evDel')) $('#evDel').onclick = async () => {
+    if (!confirm('この大会を削除しますか？（記録は消えません）')) return;
+    const ev = D.events.find(x => x.id === f.id);
+    await saveEvent({ ...ev, deleted: true });
+  };
+}
+async function saveEvent(ev) {
+  try {
+    const res = await api('adminSaveEvent', { adminKey, event: ev });
+    const i = D.events.findIndex(x => x.id === res.event.id);
+    if (i >= 0) D.events[i] = res.event; else D.events.push(res.event);
+    st.eventForm = null; if (!res.event.deleted) st.rankEvent = res.event.id; else if (st.rankEvent === res.event.id) st.rankEvent = '';
+    toast(res.event.deleted ? '削除しました' : '保存しました'); render();
+  } catch (e) { toast(e.message, 3000); }
+}
+
+/* ===================== 楽曲 ===================== */
+function viewSongs() {
+  const f = st.songForm, gm = groupMap();
+  $('#tabBody').innerHTML = (f ? songFormHtml(f) : `<div class="row" style="margin-bottom:12px"><button class="btn small" id="sOpen">＋ 新しい楽曲を追加</button>
+    <span class="btn sub small filebtn">📥 楽曲JSONを一括取り込み<input type="file" id="sImp" accept=".json,application/json"></span>
+    <button class="btn sub small" id="sExp">📤 楽曲リストを書き出す</button></div>`) + `
+  <div class="card"><h2>楽曲リスト（${gm.size}曲・${D.songs.filter(s => !s.deleted).length}譜面）</h2>
+    <input id="sq" type="search" placeholder="曲名・ジャンルで絞り込み" value="${esc(st.songQ)}" autocomplete="off">
+    <div class="muted" style="margin-top:6px">難易度ボタンで編集、「＋追加」で難易度追加。プレイヤーが追加した譜面も編集できます（👤印）。</div>
+    <div id="songList" class="list" style="margin-top:10px"></div></div>`;
+  if (f) bindSongForm(f);
+  else {
+    $('#sOpen').onclick = () => { st.songForm = { mode: 'newSong' }; render(); };
+    $('#sExp').onclick = () => download(`taiko_songs_${ymd(new Date())}.json`, JSON.stringify({ app: APP, schema: SCHEMA, player: { id: 'admin' }, exportedAt: isoLocal(), songs: D.songs, records: [] }, null, 2));
+    $('#sImp').onchange = e => { const file = e.target.files[0]; if (!file) return; const rd = new FileReader(); rd.onload = () => importSongs(String(rd.result)); rd.readAsText(file); e.target.value = ''; };
+  }
+  $('#sq').oninput = e => { st.songQ = e.target.value; renderSongList(); };
+  renderSongList();
+}
+function renderSongList() {
+  const t = st.songQ.trim().toLowerCase();
+  const cnt = new Map(); recs().forEach(r => { if (r.songId) cnt.set(r.songId, (cnt.get(r.songId) || 0) + 1); });
+  const gs = [...groupMap().values()].filter(g => !t || (g.title + ' ' + g.genre).toLowerCase().includes(t));
+  $('#songList').innerHTML = gs.slice(0, 300).map(g => {
+    const n = g.charts.reduce((a, c) => a + (cnt.get(c.id) || 0), 0);
+    const byPlayer = g.charts.filter(c => c.createdBy && c.createdBy !== 'admin');
+    return `<div class="item" data-t="${esc(g.title)}"><div class="row between" style="flex-wrap:nowrap"><div style="min-width:0"><strong>${esc(g.title)}</strong>
+      <div class="muted">${genreTag(g.genre)} 全体の記録${n}件${byPlayer.length ? `・👤 ${byPlayer.map(c => COURSE_SHORT[c.course] + '：' + esc(c.createdBy)).join('、')}` : ''}</div></div>
+      <button type="button" class="btn sub small" data-group="1">曲情報</button></div>${courseButtons(g, null, 'edit')}</div>`;
+  }).join('') + (gs.length > 300 ? `<div class="muted">ほか${gs.length - 300}曲は絞り込んでください</div>` : '') || '<div class="muted">楽曲がありません。</div>';
+  document.querySelectorAll('#songList .item[data-t]').forEach(item => {
+    const title = item.dataset.t;
+    item.querySelector('[data-group]').onclick = () => { st.songForm = { mode: 'editGroup', title }; render(); window.scrollTo(0, 0); };
+    item.querySelectorAll('.cbtn[data-id]').forEach(b => b.onclick = () => { st.songForm = { mode: 'editChart', title, id: b.dataset.id }; render(); window.scrollTo(0, 0); });
+    item.querySelectorAll('.cbtn[data-add]').forEach(b => b.onclick = () => { st.songForm = { mode: 'addChart', title, course: b.dataset.add }; render(); window.scrollTo(0, 0); });
+  });
+}
+function songFormHtml(f) {
+  const gm = groupMap();
+  if (f.mode === 'editGroup') {
+    const g = gm.get(f.title);
+    return `<div class="card"><h2>曲情報を編集</h2>
+      <label>楽曲名</label><input id="gTitle" value="${esc(f.title)}" autocomplete="off">
+      <label>ジャンル</label><input id="gGenre" list="genres" value="${esc(g ? g.genre : '')}" autocomplete="off">${genreList()}
+      <div class="muted" style="margin-top:6px">この曲のすべての難易度に反映されます。</div>
+      <button class="btn" id="gSave">保存</button><button class="btn sub danger" id="gDel">この曲を難易度ごとすべて削除</button>
+      <button class="btn sub" id="fCancel">キャンセル</button></div>`;
+  }
+  const ed = f.mode === 'editChart' ? getSong(f.id) : null;
+  const g = f.title ? gm.get(f.title) : null;
+  const used = new Set(g ? g.charts.filter(c => !ed || c.id !== ed.id).map(c => c.course) : []);
+  const allowed = COURSE_ORDER.filter(c => !used.has(c));
+  const course = ed ? ed.course : (f.course && allowed.includes(f.course) ? f.course : (allowed.includes('oni') ? 'oni' : allowed[0]));
+  const level = ed ? ed.level : 10, tier = ed && ed.subLevel ? ed.subLevel.tier : '', tag = ed && ed.subLevel ? ed.subLevel.tag : 'jiriki';
+  const sv = k => ed ? (ed[k] ?? '') : '';
+  const head = f.mode === 'newSong'
+    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off"><label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off">${genreList()}`
+    : `<div class="picked"${gcStyle(g && g.genre)}><div><strong>${esc(f.title)}</strong>${genreTag(g && g.genre)}</div></div>`;
+  return `<div class="card" style="max-width:640px"><h2>${{ newSong: '新しい楽曲を追加', addChart: '難易度を追加', editChart: '難易度を編集' }[f.mode]}</h2>${head}
+    <div class="grid2"><div><label>コース</label><select id="sCourse">${allowed.map(c => `<option value="${c}"${c === course ? ' selected' : ''}>${COURSES[c]}</option>`).join('')}</select></div>
+      <div><label>難易度</label><select id="sLevel">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}"${n === level ? ' selected' : ''}>★${n}</option>`).join('')}</select></div></div>
+    <div id="subWrap"><label>★10 細分（全良難易度表）</label>
+      <select id="sTier"><option value="">未分類</option>${TIERS.map(t => `<option value="${t}"${t === tier ? ' selected' : ''}>${t}</option>`).join('')}</select>
+      <div id="tagWrap" class="seg"><label><input type="radio" name="sTag" value="jiriki"${tag !== 'kojinsa' ? ' checked' : ''}> 地力</label>
+        <label><input type="radio" name="sTag" value="kojinsa"${tag === 'kojinsa' ? ' checked' : ''}> 個人差</label></div></div>
+    <div class="grid2"><div><label>最大コンボ数</label><input id="sCombo" type="number" inputmode="numeric" min="0" value="${sv('maxCombo')}"></div>
+      <div><label>初項（良1回の点）</label><input id="sShoko" type="number" inputmode="numeric" min="0" value="${sv('shoko')}" placeholder="不明なら空欄"></div></div>
+    ${ed && ed.createdBy && ed.createdBy !== 'admin' ? `<div class="muted" style="margin-top:6px">👤 ${esc(ed.createdBy)} が追加した譜面です。</div>` : ''}
+    <button class="btn" id="sSave">${ed ? '変更を保存' : '追加する'}</button>${ed ? '<button class="btn sub danger" id="sDel">この難易度を削除</button>' : ''}
+    <button class="btn sub" id="fCancel">キャンセル</button></div>`;
+}
+function bindSongForm(f) {
+  $('#fCancel').onclick = () => { st.songForm = null; render(); };
+  if (f.mode === 'editGroup') {
+    $('#gSave').onclick = async () => {
+      const newT = $('#gTitle').value.trim(), genre = $('#gGenre').value.trim();
+      if (!newT) { alert('楽曲名を入力してください。'); return; }
+      const gm = groupMap(), old = gm.get(f.title), target = newT !== f.title ? gm.get(newT) : null;
+      if (target) {
+        if (old.charts.some(c => target.charts.some(d => d.course === c.course))) { alert(`「${newT}」に同じコースがあるため、まとめられません。`); return; }
+        if (!confirm(`「${newT}」がすでにあります。この曲とまとめますか？`)) return;
+      }
+      await saveSongs([...old.charts.map(c => ({ ...c, title: newT, genre })), ...(target ? target.charts.map(c => ({ ...c, genre })) : [])]);
+    };
+    $('#gDel').onclick = async () => {
+      const g = groupMap().get(f.title);
+      if (!confirm(`「${f.title}」の全${g.charts.length}譜面を削除しますか？（記録は残ります）`)) return;
+      await saveSongs(g.charts.map(c => ({ ...c, deleted: true })));
+    };
+    return;
+  }
+  const toggle = () => { const lv = Number($('#sLevel').value), t = $('#sTier').value; $('#subWrap').classList.toggle('hidden', lv !== 10); $('#tagWrap').classList.toggle('hidden', !(lv === 10 && TAGGED.has(t))); };
+  $('#sLevel').onchange = toggle; $('#sTier').onchange = toggle; toggle();
+  $('#sSave').onclick = async () => {
+    const ed = f.mode === 'editChart' ? getSong(f.id) : null;
+    let title, genre;
+    if (f.mode === 'newSong') {
+      title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim();
+      if (!title) { alert('楽曲名を入力してください。'); return; }
+      const g = groupMap().get(title);
+      if (g) { if (!confirm(`「${title}」はすでに登録されています。この曲に難易度として追加しますか？`)) return; genre = g.genre || genre; }
+    } else { title = f.title; const g = groupMap().get(title); genre = (g && g.genre) || (ed && ed.genre) || ''; }
+    const course = $('#sCourse').value;
+    if (!course) { alert('追加できるコースがありません。'); return; }
+    if (D.songs.find(s => !s.deleted && s.title === title && s.course === course && (!ed || s.id !== ed.id))) { alert(`「${title}」には${COURSES[course]}がすでに登録されています。`); return; }
+    const level = Number($('#sLevel').value), tier = $('#sTier').value, tagEl = document.querySelector('input[name="sTag"]:checked');
+    const subLevel = level === 10 && tier ? { tier, tag: tier === 'SS' ? null : tier === 'F' ? 'jiriki' : (tagEl ? tagEl.value : 'jiriki') } : null;
+    const shoko = nn($('#sShoko').value), maxCombo = nn($('#sCombo').value);
+    if (shoko != null && shoko % 10 !== 0 && !confirm('初項は通常10点単位です。このまま保存しますか？')) return;
+    const now = isoLocal();
+    await saveSongs([{ ...(ed || { id: newSongId(), createdAt: now, deleted: false }), title, genre, course, level, subLevel, maxCombo, shoko, updatedAt: now }]);
+  };
+  if ($('#sDel')) $('#sDel').onclick = async () => {
+    const s = getSong(f.id);
+    if (!confirm(`${songName(s)}を削除しますか？（記録は残ります）`)) return;
+    await saveSongs([{ ...s, deleted: true }]);
+  };
+}
+async function saveSongs(list) {
+  try {
+    const res = await api('adminSaveSongs', { adminKey, songs: list }, 60000);
+    res.songs.forEach(s => { const i = D.songs.findIndex(x => x.id === s.id); if (i >= 0) D.songs[i] = s; else D.songs.push(s); });
+    st.songForm = null; toast(`${res.songs.length}譜面を保存しました`); render();
+  } catch (e) { toast(e.message, 3000); }
+}
+/** 旧ツールの書き出しファイルなどから楽曲だけを一括登録（同じ曲名・コースは飛ばす） */
+async function importSongs(text) {
+  let o; try { o = JSON.parse(text); } catch (e) { alert('読み込めないファイルです。'); return; }
+  const arr = Array.isArray(o) ? o : (o && Array.isArray(o.songs) ? o.songs : []);
+  const key = s => String(s.title || '').trim() + '\u0000' + s.course;
+  const have = new Set(D.songs.filter(s => !s.deleted).map(key));
+  const add = [];
+  arr.forEach(s => {
+    if (!s || !s.title || s.deleted || !COURSES[s.course] || have.has(key(s))) return;
+    have.add(key(s));
+    const id = /^s_[A-Za-z0-9_-]{2,40}$/.test(s.id || '') && !D.songs.some(x => x.id === s.id) ? s.id : newSongId();
+    add.push({ id, title: String(s.title).trim(), genre: s.genre || '', course: s.course, level: s.level, subLevel: s.subLevel || null,
+      maxCombo: s.maxCombo ?? null, shoko: s.shoko ?? null, createdAt: isoLocal(), updatedAt: isoLocal(), deleted: false });
+  });
+  if (!add.length) { alert('新しく追加できる譜面はありませんでした。'); return; }
+  if (!confirm(`${add.length}譜面を追加します。よろしいですか？`)) return;
+  await saveSongs(add);
+}
+
+/* ===================== プレイヤー ===================== */
+function viewPlayers() {
+  const byDev = new Map();
+  D.players.forEach(p => { if (!p.deviceId) return; byDev.set(p.deviceId, [...(byDev.get(p.deviceId) || []), p.id]); });
+  const dups = [...byDev.values()].filter(a => a.length > 1);
+  const stat = new Map();
+  recs().forEach(r => {
+    const s = stat.get(r.playerId) || { n: 0, photo: 0, last: 0 };
+    s.n++; if (r.photoId && r.status !== 'rejected') s.photo++; s.last = Math.max(s.last, ts(r.playedAt)); stat.set(r.playerId, s);
+  });
+  const ps = [...D.players].sort((a, b) => (stat.get(b.id)?.last || 0) - (stat.get(a.id)?.last || 0));
+  $('#tabBody').innerHTML = `
+  ${dups.length ? `<div class="card" style="border-color:var(--warn)"><h2 style="color:var(--warn)">⚠ 同じ端末で複数のIDが登録されています</h2>
+    ${dups.map(a => `<div>${a.map(id => `@${esc(id)}`).join('、')}</div>`).join('')}
+    <div class="muted">家族や友人と端末を共有している場合もあるため、警告のみです。</div></div>` : ''}
+  <div class="card"><h2>プレイヤー（${D.players.length}人）</h2>
+    <div class="tblwrap"><table class="rank"><tr><th>ID</th><th>表示名</th><th class="n">記録</th><th class="n">写真付き</th><th>最終プレイ</th><th>端末ID</th><th></th></tr>
+    ${ps.map(p => { const s = stat.get(p.id) || { n: 0, photo: 0, last: 0 }; const dup = (byDev.get(p.deviceId) || []).length > 1;
+      return `<tr><td>@${esc(p.id)}</td><td>${esc(p.name)}</td><td class="n">${s.n}</td><td class="n">${s.photo}</td><td class="muted">${s.last ? fmtDate(new Date(s.last)) : '-'}</td>
+      <td class="muted">${esc(p.deviceId || '-')}${dup ? '<span class="badge b-warn">重複</span>' : ''}</td>
+      <td>${p.registered ? `<button class="btn sub small" data-reset="${esc(p.id)}">引き継ぎリセット</button>` : '<span class="badge b-warn">再登録待ち</span>'}</td></tr>`; }).join('')}
+    </table></div>
+    <div class="muted" style="margin-top:8px">「引き継ぎリセット」は、プレイヤーが引き継ぎコードを失くしたときに使います。リセット後、本人が同じIDで登録し直すと、過去の記録も引き継げます。</div>
+  </div>
+  <div class="card"><h2>データの保管場所</h2>
+    <div class="muted">記録・楽曲・大会はスプレッドシート、写真はGoogleドライブのフォルダに保存されています。</div>
+    <a class="btn sub" href="${esc(D.photoFolderUrl)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">写真フォルダを開く</a>
+    <button class="btn sub" id="allExp">全データをJSONで書き出す（バックアップ）</button></div>`;
+  document.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.reset;
+    if (!confirm(`@${id} の引き継ぎコードを無効にします。\n本人が同じIDで登録し直すまで、その端末からは送信できなくなります。よろしいですか？`)) return;
+    try { await api('adminResetPlayer', { adminKey, playerId: id }); const p = D.players.find(x => x.id === id); if (p) p.registered = false; toast('リセットしました'); render(); }
+    catch (e) { toast(e.message, 3000); }
+  });
+  $('#allExp').onclick = () => download(`taiko_all_${ymd(new Date())}.json`, JSON.stringify({ app: APP, schema: SCHEMA, kind: 'admin-backup', exportedAt: isoLocal(),
+    players: D.players, songs: D.songs, records: D.records, events: D.events }, null, 2));
+}
+
+/* ===================== 起動 ===================== */
+$('#reload').onclick = () => { if (adminKey) loadAll(); };
+if (adminKey && API_URL) loadAll(); else render();
+</script>
+</body>
+</html>
