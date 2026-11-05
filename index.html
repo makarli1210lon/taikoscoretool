@@ -29,7 +29,7 @@ const syncSt = { running: false, error: null, authError: false, again: false };
 const state = {
   view: 'input', editId: null, lastSaved: null, photo: null,
   pick: { title: null, songId: '' }, newPick: null, pickQ: '',
-  histSong: 'all', songForm: null, songQ: ''
+  histSong: 'all', songForm: null, songQ: '', songGenre: '', songSort: 'title', detail: null, detailFocus: null
 };
 
 function normSong(s) {
@@ -43,6 +43,8 @@ function normSong(s) {
   }
   return { id: String(s.id), title: String(s.title).trim().slice(0, 100), genre: String(s.genre || '').slice(0, 40), course, level, subLevel: sub,
     maxCombo: nn(s.maxCombo), shoko: nn(s.shoko), createdBy: s.createdBy == null ? '' : String(s.createdBy),
+    composer: String(s.composer || '').slice(0, 60), addedDate: isYmd(s.addedDate) ? s.addedDate : '',
+    wikiUrl: isHttps(s.wikiUrl) ? s.wikiUrl : '', videoUrl: isHttps(s.videoUrl) ? s.videoUrl : '',
     createdAt: s.createdAt || isoLocal(), updatedAt: s.updatedAt || isoLocal(), deleted: !!s.deleted, _sv: s._sv || null };
 }
 function normRec(r) {
@@ -85,7 +87,7 @@ function newRecordId() { const st = stamp(new Date()); let id; do { id = `TK-${m
 function newSongId() { let id; do { id = 's_' + rand(8).toLowerCase(); } while (db.songs.some(s => s.id === id)); return id; }
 const activeEvents = () => (db.events || []).filter(e => eventActive(e));
 const upcomingEvents = () => (db.events || []).filter(e => !e.deleted && ts(e.start) > Date.now()).sort((a, b) => ts(a.start) - ts(b.start));
-function activeEventChartIds() { const s = new Set(); activeEvents().forEach(e => (e.chartIds || []).forEach(id => s.add(id))); return s; }
+function activeEventChartIds() { const s = new Set(); activeEvents().forEach(e => eventChartIds(e, db.songs).forEach(id => s.add(id))); return s; }
 /** ランキング対象かどうか（写真あり・却下でない） */
 function rankState(r) {
   if (r.status === 'rejected') return 'rejected';
@@ -138,7 +140,7 @@ function compressImage(file) {
 
 /* ===================== 同期 ===================== */
 const songPayload = s => ({ id: s.id, title: s.title, genre: s.genre, course: s.course, level: s.level, subLevel: s.subLevel,
-  maxCombo: s.maxCombo, shoko: s.shoko, createdAt: s.createdAt, updatedAt: s.updatedAt, deleted: s.deleted });
+  maxCombo: s.maxCombo, shoko: s.shoko, composer: s.composer, addedDate: s.addedDate, createdAt: s.createdAt, updatedAt: s.updatedAt, deleted: s.deleted });
 const recPayload = r => ({ id: r.id, songId: r.songId, good: r.good, ok: r.ok, bad: r.bad, roll: r.roll, score: r.score, scoreSource: r.scoreSource,
   mismatch: r.mismatch, playedAt: r.playedAt, createdAt: r.createdAt, updatedAt: r.updatedAt, deleted: r.deleted });
 
@@ -225,8 +227,13 @@ function afterSync() {
 
 /* ===================== 画面共通 ===================== */
 function leaveEdit() { if (state.editId) { state.editId = null; state.pick = state.newPick || { title: null, songId: '' }; state.newPick = null; } }
-function go(v) { if (v !== 'input') leaveEdit(); if (v !== 'songs') state.songForm = null; state.view = v; render(); window.scrollTo(0, 0); }
+function go(v) {
+  if (v !== 'input') leaveEdit();
+  if (v !== 'songs' || state.view === 'songs') { state.songForm = null; state.detail = null; } // 楽曲タブを押し直すと一覧に戻る
+  state.view = v; render(); window.scrollTo(0, 0);
+}
 function refreshChrome() {
+  refreshOniBoth(db.songs);
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === state.view));
   $('#who').textContent = db.player.id ? `${db.player.name || db.player.id} @${db.player.id}` : 'プレイヤー未登録';
   const n = pendingCount(), pill = $('#syncPill');
@@ -312,11 +319,18 @@ function renderInputExtras() {
   const act = activeEvents(), up = upcomingEvents().slice(0, 2);
   if (!state.editId && (act.length || up.length)) {
     h += `<div class="card"><h2>🏆 大会</h2>` + act.map(e => {
-      const charts = (e.chartIds || []).map(getSong).filter(Boolean);
-      return `<div style="margin-bottom:8px"><strong>${esc(e.name)}</strong> <span class="badge b-ok">開催中</span>
+      // 譜面単位：課題譜面を並べる／曲単位：曲と「基準コースまで」を並べ、基準コースを選んだ状態にする
+      const items = isMulti(e)
+        ? (e.chartIds || []).map(getSong).filter(Boolean).map(s => ({ id: s.id, title: s.title, course: s.course, label: cshort(s) }))
+        : resolveEventSongs(e, db.songs).map(x => {
+            const base = x.charts.find(c => c.course === x.cfg.base) || x.charts[x.charts.length - 1];
+            return base ? { id: base.id, title: x.group.title, course: x.cfg.base, label: '〜' + cshort({ course: x.cfg.base, title: x.group.title }) } : null;
+          }).filter(Boolean);
+      return `<div style="margin-bottom:8px"><strong>${esc(e.name)}</strong> ${eventBadges(e)}
         <div class="muted">${fmtDate(e.start)} 〜 ${fmtDate(e.end)}</div>
         ${e.note ? `<div class="muted">${esc(e.note)}</div>` : ''}
-        <div class="row" style="margin-top:6px">${charts.map(s => `<button type="button" class="btn sub small cc-${s.course}" data-ev="${esc(s.id)}" style="border-color:var(--cc)">${esc(s.title)} <b style="color:var(--cc)">${COURSE_SHORT[s.course]}</b></button>`).join('')}</div></div>`;
+        ${isMulti(e) ? '' : '<div class="muted">曲ごとに、表示のコースまでのどの難易度でも参加できます（曲によってコース別のハンデがあります）。</div>'}
+        <div class="row" style="margin-top:6px">${items.map(s => `<button type="button" class="btn sub small cc-${s.course}" data-ev="${esc(s.id)}" style="border-color:var(--cc)">${esc(s.title)} <b style="color:var(--cc)">${esc(s.label)}</b></button>`).join('')}</div></div>`;
     }).join('') + up.map(e => `<div class="muted">開催予定：${esc(e.name)}（${fmtDay(e.start)}〜）</div>`).join('') +
       (act.length ? `<div class="muted" style="margin-top:6px">課題譜面をタップすると選択できます。期間中の写真付き記録がランキング対象です。</div>` : '') + `</div>`;
   }
@@ -392,7 +406,7 @@ function updateInput() {
   const s = getSong(state.pick.songId);
   const g = n0($('#good').value), o = n0($('#ok').value), b = n0($('#bad').value), r = n0($('#roll').value);
   const info = $('#songInfo');
-  if (info) info.innerHTML = s ? `${esc(COURSES[s.course])}・${esc(lvLabel(s))}・最大${s.maxCombo ?? '?'}コンボ・初項 ${s.shoko ? fmtN(s.shoko) : '未登録'}${s.deleted ? '<span class="badge b-warn">削除済み譜面</span>' : ''}` : '';
+  if (info) info.innerHTML = s ? `${esc(cname(s))}・${esc(lvLabel(s))}・最大${s.maxCombo ?? '?'}コンボ・初項 ${s.shoko ? fmtN(s.shoko) : '未登録'}${s.deleted ? '<span class="badge b-warn">削除済み譜面</span>' : ''}` : '';
   const sum = g + o + b;
   let si = `判定合計 ${sum}`;
   if (s && s.maxCombo) si += ` / ${s.maxCombo}` + (sum === s.maxCombo ? '<span class="badge b-ok">一致</span>' : sum > 0 ? '<span class="badge b-warn">不一致</span>' : '');
@@ -518,47 +532,83 @@ function recItem(r, best) {
       <button class="btn sub small danger" onclick="delRec('${r.id}')">削除</button></div></div>`;
 }
 
-/* ===================== 楽曲画面 ===================== */
+/* ===================== 楽曲画面 =====================
+   一覧：曲ごとに簡略ボタン（★のみ）。登録済みを押すと詳細へ、「＋」で難易度追加
+   詳細：全コースを縦に並べ、「攻略」「▶」「編集」
+   songForm.mode：newSong／addChart／editChart／editGroup */
 function viewSongs() {
-  const f = state.songForm, gm = groupMap();
+  if (state.songForm) { $('#view').innerHTML = songFormHtml(state.songForm); bindSongForm(state.songForm); return; }
+  if (state.detail) return viewSongDetail();
+  const gm = groupMap();
   $('#view').innerHTML = `
-  ${f ? songFormHtml(f) : `<button class="btn" id="sOpen" style="margin:0 0 12px">＋ 新しい楽曲を追加</button>`}
+  <button class="btn" id="sOpen" style="margin:0 0 12px">＋ 新しい楽曲を追加</button>
   <div class="card">
     <h2>楽曲リスト（${gm.size}曲・${activeSongs().length}譜面）</h2>
-    <input id="sq" type="search" placeholder="曲名・ジャンルで絞り込み" value="${esc(state.songQ)}" autocomplete="off">
-    <div class="muted" style="margin-top:6px">楽曲リストは全員で共有されます。管理者が登録した譜面は編集できませんが、「＋追加」で難易度を追加できます。</div>
+    ${sortBar(state)}
+    <div class="muted" style="margin-top:6px">難易度を押すと詳細、「＋」でその難易度を追加できます。楽曲リストは全員で共有されます。</div>
     <div id="songList" class="list" style="margin-top:10px"></div>
   </div>`;
-  if (f) bindSongForm(f); else $('#sOpen').onclick = () => openSongForm({ mode: 'newSong' });
-  $('#sq').oninput = e => { state.songQ = e.target.value; renderSongList(); };
+  $('#sOpen').onclick = () => openSongForm({ mode: 'newSong' });
+  bindSortBar(state, renderSongList);
   renderSongList();
 }
 function openSongForm(f) { state.songForm = f; render(); window.scrollTo(0, 0); }
+function openDetail(title, focusId) { state.detail = title; state.detailFocus = focusId || null; state.songForm = null; render(); if (!focusId) window.scrollTo(0, 0); }
 function renderSongList() {
-  const t = state.songQ.trim().toLowerCase();
-  const cnt = new Map(); for (const r of activeRecs()) if (r.songId) cnt.set(r.songId, (cnt.get(r.songId) || 0) + 1);
-  const gs = [...groupMap().values()].filter(g => !t || (g.title + ' ' + g.genre).toLowerCase().includes(t));
+  const gs = filterSortGroups(groupMap(), state.songQ, state.songGenre, state.songSort);
   const box = $('#songList');
-  box.innerHTML = gs.length ? gs.slice(0, 200).map(g => {
-    const n = g.charts.reduce((a, c) => a + (cnt.get(c.id) || 0), 0);
-    const editable = g.charts.every(canEditSong);
-    return `<div class="item" data-t="${esc(g.title)}">
+  box.innerHTML = gs.length ? gs.slice(0, 200).map(g => `<div class="item" data-t="${esc(g.title)}">
       <div class="row between" style="flex-wrap:nowrap"><div style="min-width:0"><strong>${esc(g.title)}</strong>
-      <div class="muted">${genreTag(g.genre)} 自分の記録${n}件</div></div>
-      ${editable ? '<button type="button" class="btn sub small" data-group="1">曲情報</button>' : ''}</div>
-      ${courseButtons(g, null, 'edit')}</div>`;
-  }).join('') + (gs.length > 200 ? `<div class="muted">ほか${gs.length - 200}曲は絞り込んでください</div>` : '')
-    : '<div class="muted">楽曲がありません。</div>';
+      <div class="muted">${genreTag(g.genre)}${songMeta(g)}</div></div>
+      <button type="button" class="btn sub small" data-detail="1">詳細</button></div>
+      ${courseButtons(g, null, 'list')}</div>`).join('') + (gs.length > 200 ? `<div class="muted">ほか${gs.length - 200}曲は絞り込んでください</div>` : '')
+    : '<div class="muted">該当する楽曲がありません。</div>';
   box.querySelectorAll('.item[data-t]').forEach(item => {
     const title = item.dataset.t;
-    const gb = item.querySelector('[data-group]'); if (gb) gb.onclick = () => openSongForm({ mode: 'editGroup', title });
-    item.querySelectorAll('.cbtn[data-id]').forEach(b => b.onclick = () => {
-      const s = getSong(b.dataset.id);
-      if (s && canEditSong(s)) openSongForm({ mode: 'editChart', title, id: b.dataset.id });
-      else toast('管理者が登録した譜面は編集できません');
-    });
+    item.querySelector('[data-detail]').onclick = () => openDetail(title);
+    item.querySelectorAll('.cbtn[data-id]').forEach(b => b.onclick = () => openDetail(title, b.dataset.id));
     item.querySelectorAll('.cbtn[data-add]').forEach(b => b.onclick = () => openSongForm({ mode: 'addChart', title, course: b.dataset.add }));
   });
+}
+function viewSongDetail() {
+  const g = groupMap().get(state.detail);
+  if (!g) { state.detail = null; return viewSongs(); }
+  const my = new Map();
+  for (const r of activeRecs()) {
+    if (!r.songId) continue;
+    const m = my.get(r.songId) || { n: 0, best: null };
+    m.n++; if (r.score != null && (m.best == null || r.score > m.best)) m.best = r.score; my.set(r.songId, m);
+  }
+  const canGroup = g.charts.every(canEditSong);
+  const evIds = activeEventChartIds();
+  $('#view').innerHTML = `
+  <button class="btn sub small" id="back" style="margin-bottom:10px">‹ 楽曲リスト</button>
+  <div class="card">
+    <div class="picked"${gcStyle(g.genre)}><div><strong>${esc(g.title)}</strong>${genreTag(g.genre)}</div>
+      <button type="button" class="btn sub small${canGroup ? '' : ' faded'}" id="gEdit">曲情報</button></div>
+    <div class="muted" style="margin-top:8px">作曲：${esc(g.composer || '—')}<br>アーケード追加日：${g.addedDate ? fmtYmd(g.addedDate) : '—'}</div>
+  </div>
+  <div class="card"><h2>難易度</h2><div class="list">${g.charts.map(c => {
+    const m = my.get(c.id);
+    return `<div class="item crow cc-${c.course}" id="c_${esc(c.id)}">
+      <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0">
+        <b style="color:var(--cc)">${esc(cname(c))}</b> <span>${esc(lvLabel(c))}</span>${evIds.has(c.id) ? ' 🏆' : ''}
+        <div class="muted">${c.maxCombo ?? '?'}コンボ・初項${c.shoko ? fmtN(c.shoko) : '未登録'}</div>
+        <div class="muted">${m ? `自分の記録 ${m.n}件・ベスト ${fmtN(m.best)}` : '自分の記録なし'}</div></div>
+        ${linkButtons(c, canEditSong(c))}</div></div>`;
+  }).join('')}</div>
+  <div class="muted" style="margin-top:8px">難易度の追加は、楽曲リストの「＋」から行えます。</div></div>`;
+  $('#back').onclick = () => { state.detail = null; render(); };
+  $('#gEdit').onclick = () => canGroup ? openSongForm({ mode: 'editGroup', title: g.title }) : toast(EDIT_DENIED, 2500);
+  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
+    const s = getSong(b.dataset.edit);
+    if (s && canEditSong(s)) openSongForm({ mode: 'editChart', title: g.title, id: s.id }); else toast(EDIT_DENIED, 2500);
+  });
+  if (state.detailFocus) {
+    const el = document.getElementById('c_' + state.detailFocus);
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); }
+    state.detailFocus = null;
+  }
 }
 function songFormHtml(f) {
   const gm = groupMap();
@@ -567,6 +617,7 @@ function songFormHtml(f) {
     return `<div class="card"><h2>曲情報を編集</h2>
       <label>楽曲名</label><input id="gTitle" value="${esc(f.title)}" autocomplete="off">
       <label>ジャンル</label><input id="gGenre" list="genres" value="${esc(g ? g.genre : '')}" autocomplete="off">${genreList()}
+      ${songInfoFields(g)}
       <div class="muted" style="margin-top:6px">この曲のすべての難易度に反映されます。</div>
       <button class="btn" id="gSave">保存</button>
       <button class="btn sub danger" id="gDel">この曲を難易度ごとすべて削除</button>
@@ -581,7 +632,7 @@ function songFormHtml(f) {
   const tier = ed && ed.subLevel ? ed.subLevel.tier : '', tag = ed && ed.subLevel ? ed.subLevel.tag : 'jiriki';
   const sv = k => ed ? (ed[k] ?? '') : '';
   const head = f.mode === 'newSong'
-    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off"><label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off">${genreList()}`
+    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off"><label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off">${genreList()}${songInfoFields(null)}`
     : `<div class="picked"${gcStyle(g && g.genre)}><div><strong>${esc(f.title)}</strong>${genreTag(g && g.genre)}</div></div>`;
   return `<div class="card"><h2>${{ newSong: '新しい楽曲を追加', addChart: '難易度を追加', editChart: '難易度を編集' }[f.mode]}</h2>
     ${head}
@@ -601,13 +652,21 @@ function songFormHtml(f) {
       <div><label>最大コンボ数</label><input id="sCombo" type="number" inputmode="numeric" min="0" value="${sv('maxCombo')}"></div>
       <div><label>初項（良1回の点）</label><input id="sShoko" type="number" inputmode="numeric" min="0" value="${sv('shoko')}" placeholder="不明なら空欄"></div>
     </div>
-    <div class="muted" style="margin-top:6px">初項を登録した難易度だけ、スコアを自動計算します。</div>
+    <div class="muted" style="margin-top:6px">初項を登録した難易度だけ、スコアを自動計算します。攻略・動画リンクは管理者が設定します。</div>
     <button class="btn" id="sSave">${ed ? '変更を保存' : '追加する'}</button>
     ${ed ? '<button class="btn sub danger" id="sDel">この難易度を削除</button>' : ''}
     <button class="btn sub" id="fCancel">キャンセル</button></div>`;
 }
+/** 曲単位の任意項目（作曲者・アーケード追加日） */
+function songInfoFields(g) {
+  return `<div class="grid2">
+    <div><label>作曲者（任意）</label><input id="sComposer" maxlength="60" value="${esc(g ? g.composer : '')}" autocomplete="off"></div>
+    <div><label>アーケード追加日（任意）</label><input id="sAdded" type="date" value="${esc(g ? g.addedDate : '')}"></div></div>`;
+}
+const readInfo = () => ({ composer: $('#sComposer').value.trim().slice(0, 60), addedDate: isYmd($('#sAdded').value) ? $('#sAdded').value : '' });
+function closeForm(title) { state.songForm = null; state.detail = title && groupMap().has(title) ? title : null; render(); window.scrollTo(0, 0); }
 function bindSongForm(f) {
-  $('#fCancel').onclick = () => { state.songForm = null; render(); };
+  $('#fCancel').onclick = () => closeForm(f.mode === 'newSong' ? null : f.title);
   if (f.mode === 'editGroup') { $('#gSave').onclick = () => saveGroup(f); $('#gDel').onclick = () => delGroup(f.title); return; }
   const toggle = () => {
     const lv = Number($('#sLevel').value), t = $('#sTier').value;
@@ -620,13 +679,20 @@ function bindSongForm(f) {
 }
 function saveChart(f) {
   const ed = f.mode === 'editChart' ? getSong(f.id) : null;
-  let title, genre;
+  let title, genre, info;
   if (f.mode === 'newSong') {
-    title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim();
+    title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim(); info = readInfo();
     if (!title) { alert('楽曲名を入力してください。'); return; }
     const g = groupMap().get(title);
-    if (g) { if (!confirm(`「${title}」はすでに登録されています。この曲に難易度として追加しますか？`)) return; genre = g.genre || genre; }
-  } else { title = f.title; const g = groupMap().get(title); genre = (g && g.genre) || (ed && ed.genre) || ''; }
+    if (g) {
+      if (!confirm(`「${title}」はすでに登録されています。この曲に難易度として追加しますか？`)) return;
+      genre = g.genre || genre; info = { composer: g.composer || info.composer, addedDate: g.addedDate || info.addedDate };
+    }
+  } else {
+    title = f.title; const g = groupMap().get(title);
+    genre = (g && g.genre) || (ed && ed.genre) || '';
+    info = { composer: (g && g.composer) || '', addedDate: (g && g.addedDate) || '' };
+  }
   const course = $('#sCourse').value;
   if (!course) { alert('追加できるコースがありません。'); return; }
   if (activeSongs().find(s => s.title === title && s.course === course && (!ed || s.id !== ed.id))) { alert(`「${title}」には${COURSES[course]}がすでに登録されています。`); return; }
@@ -635,26 +701,27 @@ function saveChart(f) {
   if (level === 10 && tier) subLevel = { tier, tag: tier === 'SS' ? null : tier === 'F' ? 'jiriki' : (tagEl ? tagEl.value : 'jiriki') };
   const shoko = nn($('#sShoko').value), maxCombo = nn($('#sCombo').value);
   if (shoko != null && shoko % 10 !== 0 && !confirm('初項は通常10点単位です。このまま保存しますか？')) return;
-  const data = { title, genre, course, level, subLevel, maxCombo, shoko, updatedAt: isoLocal() };
+  const data = { title, genre, ...info, course, level, subLevel, maxCombo, shoko, updatedAt: isoLocal() };
   if (ed) Object.assign(ed, data);
-  else db.songs.push({ id: newSongId(), ...data, createdBy: me(), createdAt: data.updatedAt, deleted: false, _sv: null });
-  save(); state.songForm = null; toast(ed ? '難易度を更新しました' : '追加しました'); render(); scheduleSync();
+  else db.songs.push({ id: newSongId(), ...data, wikiUrl: '', videoUrl: '', createdBy: me(), createdAt: data.updatedAt, deleted: false, _sv: null });
+  save(); toast(ed ? '難易度を更新しました' : '追加しました'); closeForm(title); scheduleSync();
 }
 function saveGroup(f) {
-  const newT = $('#gTitle').value.trim(), genre = $('#gGenre').value.trim();
+  const newT = $('#gTitle').value.trim(), genre = $('#gGenre').value.trim(), info = readInfo();
   if (!newT) { alert('楽曲名を入力してください。'); return; }
   const gm = groupMap(), old = gm.get(f.title);
-  if (!old) { state.songForm = null; render(); return; }
+  if (!old) { closeForm(null); return; }
   const target = newT !== f.title ? gm.get(newT) : null;
   if (target) {
     if (old.charts.some(c => target.charts.some(d => d.course === c.course))) { alert(`「${newT}」に同じコースがあるため、まとめられません。`); return; }
+    if (!target.charts.every(canEditSong)) { alert(`「${newT}」は管理者が登録した曲のため、まとめられません。`); return; }
     if (!confirm(`「${newT}」がすでにあります。この曲とまとめますか？`)) return;
   }
   const now = isoLocal();
-  old.charts.forEach(c => { c.title = newT; c.genre = genre; c.updatedAt = now; });
+  [...old.charts, ...(target ? target.charts : [])].forEach(c => { c.title = newT; c.genre = genre; c.composer = info.composer; c.addedDate = info.addedDate; c.updatedAt = now; });
   if (state.pick.title === f.title) state.pick.title = newT;
   if (state.newPick && state.newPick.title === f.title) state.newPick.title = newT;
-  save(); state.songForm = null; toast('曲情報を更新しました'); render(); scheduleSync();
+  save(); toast('曲情報を更新しました'); closeForm(newT); scheduleSync();
 }
 function delChart(id) {
   const s = getSong(id); if (!s) return;
@@ -662,7 +729,7 @@ function delChart(id) {
   if (!confirm(`${songName(s)}を削除しますか？` + (n ? `\n記録${n}件はそのまま残ります。` : ''))) return;
   s.deleted = true; s.updatedAt = isoLocal();
   if (state.pick.songId === id) state.pick.songId = '';
-  save(); state.songForm = null; toast('削除しました'); render(); scheduleSync();
+  save(); toast('削除しました'); closeForm(s.title); scheduleSync();
 }
 function delGroup(title) {
   const g = groupMap().get(title); if (!g) return;
@@ -671,7 +738,7 @@ function delGroup(title) {
   if (!confirm(`「${title}」の全${g.charts.length}譜面を削除しますか？` + (n ? `\n記録${n}件はそのまま残ります。` : ''))) return;
   const now = isoLocal(); g.charts.forEach(c => { c.deleted = true; c.updatedAt = now; });
   if (state.pick.title === title) state.pick = { title: null, songId: '' };
-  save(); state.songForm = null; toast('削除しました'); render(); scheduleSync();
+  save(); toast('削除しました'); closeForm(null); scheduleSync();
 }
 
 /* ===================== マイデータ画面 ===================== */
@@ -721,7 +788,7 @@ function viewMyData() {
     <label>バックアップ・旧バージョンのデータを読み込む</label>
     <input type="file" id="imFile" accept=".json,application/json,text/plain">
   </div>
-  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.0・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
+  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.1・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
 
   if (registered()) {
     $('#nameSave').onclick = saveName;

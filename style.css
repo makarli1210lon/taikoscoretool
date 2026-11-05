@@ -77,6 +77,24 @@ textarea{min-height:90px;font-size:13px;font-family:ui-monospace,Menlo,monospace
 .cbtn.add span,.cbtn.add small{opacity:.75}
 .cbtn .ev{position:absolute;top:-7px;right:-4px;font-size:12px;line-height:1}
 @media (max-width:370px){.cbtn span{font-size:11px}.cbtn small{font-size:9.5px}}
+/* 一覧用の簡略ボタン */
+.courses.compact .cbtn{min-height:42px;justify-content:center;padding:4px 2px}
+.cbtn b{font-size:14px;font-weight:800;color:var(--cc);line-height:1.2;white-space:nowrap}
+.cbtn.add b{font-size:18px;opacity:.8}
+.courses.compact .cbtn small{font-size:10px;color:var(--cc);font-weight:700}
+.meta{display:inline-block;margin-left:6px;font-size:12px;color:var(--muted)}
+/* 詳細ページ */
+.lbtns{display:flex;gap:6px;flex-shrink:0}
+.invis{visibility:hidden}
+.faded{opacity:.35}
+.vbtn{color:#e02020!important;font-weight:800;min-width:38px;text-align:center}
+.crow{border-left:4px solid var(--cc);padding-left:10px!important}
+.flash{animation:flash 1.6s ease-out}
+@keyframes flash{0%{background:var(--soft)}100%{background:transparent}}
+/* 大会設定 */
+.cfgtbl{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+.cfgtbl th,.cfgtbl td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.cfgtbl input{padding:6px 8px;text-align:right}
 /* 楽曲ピッカー */
 .plist{margin-top:8px;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px}
 .pitem{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;background:none;border:0;border-top:1px solid var(--line);border-left:4px solid var(--gc,transparent);padding:10px;color:var(--text);cursor:pointer}
