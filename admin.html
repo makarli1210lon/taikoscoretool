@@ -56,7 +56,8 @@ async function loadAll() {
 }
 function render() {
   $('#who').textContent = D ? `プレイヤー${D.players.length}人・記録${recs().length}件` : '';
-  $('#banners').innerHTML = !API_URL ? `<div class="banner err">config.js にサーバーURLが設定されていません。</div>` : '';
+  $('#banners').innerHTML = !API_URL ? `<div class="banner err">config.js にサーバーURLが設定されていません。</div>`
+    : D && serverOutdated(D.version) ? `<div class="banner err">⚠ ${esc(OUTDATED_MSG)}<br>（サーバー：${esc(D.version || '2.0以前')}／必要：${REQUIRED_SERVER}）</div>` : '';
   if (!D) return viewLogin();
   refreshOniBoth(D.songs);
   const tabs = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー']];
@@ -455,6 +456,7 @@ function bindEventForm(f) {
 async function saveEvent(ev) {
   try {
     const res = await api('adminSaveEvent', { adminKey, event: ev });
+    if (ev.multiCourse === false && res.event.multiCourse !== false) { alert('曲単位の設定がサーバーに保存されませんでした。\n\n' + OUTDATED_MSG); return; }
     const i = D.events.findIndex(x => x.id === res.event.id);
     if (i >= 0) D.events[i] = res.event; else D.events.push(res.event);
     st.eventForm = null; if (!res.event.deleted) st.rankEvent = res.event.id; else if (st.rankEvent === res.event.id) st.rankEvent = '';
@@ -600,7 +602,13 @@ async function saveSongs(list) {
   try {
     const res = await api('adminSaveSongs', { adminKey, songs: list }, 60000);
     res.songs.forEach(s => { const i = D.songs.findIndex(x => x.id === s.id); if (i >= 0) D.songs[i] = s; else D.songs.push(s); });
-    st.songForm = null; toast(`${res.songs.length}譜面を保存しました`); render();
+    if (res.version) D.version = res.version;
+    // 送った項目がサーバーで捨てられていないか確認（旧バージョンのデプロイ対策）
+    const lost = list.some(s => { const r = res.songs.find(x => x.id === s.id);
+      return r && ['wikiUrl', 'videoUrl', 'composer', 'addedDate'].some(k => s[k] && !r[k]); });
+    st.songForm = null; render();
+    if (lost) alert('一部の項目（リンク・作曲者・追加日）がサーバーに保存されませんでした。\n\n' + OUTDATED_MSG);
+    else toast(`${res.songs.length}譜面を保存しました`);
   } catch (e) { toast(e.message, 3000); }
 }
 /** 旧ツールの書き出しファイルなどから楽曲だけを一括登録（同じ曲名・コースは飛ばす） */
