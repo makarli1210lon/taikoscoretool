@@ -3,6 +3,10 @@
 
 const APP = 'taiko-score', SCHEMA = 2;
 const API_URL = (window.TAIKO_API_URL || '').trim();
+/** 必要なサーバー（GAS）のバージョン。Code.gs の SERVER_VERSION と合わせる */
+const REQUIRED_SERVER = '2.1';
+const serverOutdated = v => !v || v.localeCompare(REQUIRED_SERVER, undefined, { numeric: true }) < 0;
+const OUTDATED_MSG = `サーバー（Google Apps Script）が旧バージョンのまま動いています。Apps Scriptで Code.gs を貼り替えて保存したあと、「デプロイ → デプロイを管理 → ✏編集 → バージョン：新バージョン → デプロイ」を行ってください。このままでは、リンク・作曲者・追加日・曲単位大会の設定が保存されません。`;
 const COURSES = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい', oni: 'おに', ura: 'おに(裏)' };
 const COURSE_SHORT = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい', oni: 'おに', ura: 'おに裏' };
 const COURSE_DOT = { easy: '簡', normal: '普', hard: '難', oni: '鬼', ura: '裏' };
