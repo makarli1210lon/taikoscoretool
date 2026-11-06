@@ -101,7 +101,51 @@ textarea{min-height:90px;font-size:13px;font-family:ui-monospace,Menlo,monospace
 .pitem:first-child{border-top:0}
 .pitem>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dots{display:flex;gap:3px;flex-shrink:0}
-.dots i{font-style:normal;font-size:10px;font-weight:800;color:#fff;background:var(--cc);border-radius:4px;padding:0 4px;line-height:16px}
+/* コース記号（画像に差し替える場合は .cicon.cc-oni{background:url(img/oni.png) center/contain no-repeat;color:transparent} など） */
+.cicon{display:inline-flex;align-items:center;justify-content:center;font-style:normal;font-size:10px;font-weight:800;color:#fff;background:var(--cc);border-radius:4px;width:18px;height:18px;line-height:1;flex-shrink:0}
+.cicon.lg{width:24px;height:24px;font-size:13px;border-radius:6px}
+/* 難易度アイコン画像（梅・竹・松・鬼・裏鬼のオリジナル図案） */
+.cicon.cc-easy,.cicon.cc-normal,.cicon.cc-hard,.cicon.cc-oni,.cicon.cc-ura{background:center/contain no-repeat;color:transparent;border-radius:0;width:20px;height:20px}
+.cicon.lg.cc-easy,.cicon.lg.cc-normal,.cicon.lg.cc-hard,.cicon.lg.cc-oni,.cicon.lg.cc-ura{width:28px;height:28px}
+.cicon.cc-easy{background-image:url(img/course-easy.svg)}
+.cicon.cc-normal{background-image:url(img/course-normal.svg)}
+.cicon.cc-hard{background-image:url(img/course-hard.svg)}
+.cicon.cc-oni{background-image:url(img/course-oni.svg)}
+.cicon.cc-ura{background-image:url(img/course-ura.svg)}
+/* 灰色版（不明・譜面なし用）：<i class="cicon cc-oni gray"> */
+.cicon.gray.cc-easy{background-image:url(img/course-easy-gray.svg)}
+.cicon.gray.cc-normal{background-image:url(img/course-normal-gray.svg)}
+.cicon.gray.cc-hard{background-image:url(img/course-hard-gray.svg)}
+.cicon.gray.cc-oni{background-image:url(img/course-oni-gray.svg)}
+.cicon.gray.cc-ura{background-image:url(img/course-ura-gray.svg)}
+/* 王冠（オリジナル図案の画像）：未クリア＝ベージュの線のみ／クリア（目安）＝薄い銀／フルコンボ＝金／全良＝虹 */
+.crown{display:inline-block;width:30px;height:20px;vertical-align:-4px;flex-shrink:0;background:center/contain no-repeat}
+.cr-none{background-image:url(img/crown-none.svg)}
+.cr-clear{background-image:url(img/crown-clear.svg)}
+.cr-fc{background-image:url(img/crown-fc.svg)}
+.cr-ap{background-image:url(img/crown-ap.svg)}
+/* 王冠の予備の文字（画像があるときは隠す） */
+.crown{text-align:center;line-height:20px}
+.crown .crt{display:none;font-size:15px;font-style:normal;font-weight:800}
+/* 画像を読み込めなかったときの代わりの表示（common.js が <html> に印を付ける） */
+html.noimg-cc-easy .cicon.cc-easy,html.noimg-cc-normal .cicon.cc-normal,html.noimg-cc-hard .cicon.cc-hard,html.noimg-cc-oni .cicon.cc-oni,html.noimg-cc-ura .cicon.cc-ura{background:var(--cc)!important;color:#fff;border-radius:4px;width:18px;height:18px}
+html.noimg-cc-easy .cicon.lg.cc-easy,html.noimg-cc-normal .cicon.lg.cc-normal,html.noimg-cc-hard .cicon.lg.cc-hard,html.noimg-cc-oni .cicon.lg.cc-oni,html.noimg-cc-ura .cicon.lg.cc-ura{width:24px;height:24px;border-radius:6px}
+html.noimg-cr-none .crown.cr-none,html.noimg-cr-clear .crown.cr-clear,html.noimg-cr-fc .crown.cr-fc,html.noimg-cr-ap .crown.cr-ap{background-image:none;width:auto;min-width:16px}
+html.noimg-cr-none .crown.cr-none .crt,html.noimg-cr-clear .crown.cr-clear .crt,html.noimg-cr-fc .crown.cr-fc .crt,html.noimg-cr-ap .crown.cr-ap .crt{display:inline}
+.cr-none .crt{color:#c9b083}
+.cr-clear .crt{color:#a7b0bc}
+.cr-fc .crt{color:#e0a91c}
+.cr-ap .crt{background:linear-gradient(90deg,#ff5b6e,#ffb24d,#ffe45c,#5fd683,#4fb8ff,#9b7bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+/* 曲名ブロック */
+.shead{min-width:0}
+.shead .st{font-size:16px;font-weight:800;line-height:1.35;overflow-wrap:anywhere}
+.shead .ss{font-size:12px;color:var(--muted);line-height:1.6}
+.shead .ss .meta:first-child{margin-left:0}
+/* 詳細ページのコース行 */
+.cl{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:800;color:var(--cc)}
+.cs{font-size:12px;color:var(--muted);margin-top:2px}
+.cb{display:flex;align-items:center;gap:6px;font-size:15px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.cb .none{font-size:12px;color:var(--muted);font-weight:400}
 .picked{display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--soft);border-radius:8px;padding:8px 10px;border-left:5px solid var(--gc,transparent)}
 .picked>div{min-width:0}
 .picked strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

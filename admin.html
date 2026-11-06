@@ -16,6 +16,10 @@
   .rk1{color:#d4a017}.rk2{color:#8f9aa6}.rk3{color:#b9733a}
   .cfg{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
   .raw{display:block;font-size:11px;color:var(--muted);font-weight:400}
+  .snapnote{background:var(--soft);border-radius:8px;padding:8px 10px;font-size:13px;margin-top:8px}
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px}
+  .kv span:nth-child(odd){color:var(--muted)}
 </style>
 </head>
 <body>
@@ -29,10 +33,12 @@
 const KEY_LS = 'taikoAdminKey';
 let adminKey = '';
 try { adminKey = localStorage.getItem(KEY_LS) || ''; } catch (e) {}
-let D = null; // { players, songs, records, events, photoFolderUrl }
+let D = null; // { players, songs, records, events, results, photoFolderUrl, version }
 const st = { tab: 'rank', rankMode: 'event', rankEvent: '', rankChart: '', detail: null, eventForm: null, evQ: '',
-  songForm: null, songQ: '', songGenre: '', songSort: 'title' };
+  songForm: null, songQ: '', songGenre: '', songSort: 'title',
+  dataPlayer: '', dataQ: '', dataFlag: 'need', backups: null };
 const photoCache = new Map();
+const TABS = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー'], ['data', '🗂 スコアデータ'], ['manage', '⚙ 管理']];
 
 const getSong = id => id && D ? (D.songs.find(s => s.id === id) || null) : null;
 const groupMap = () => groupSongs(D.songs);
@@ -40,6 +46,16 @@ const pname = id => { const p = D.players.find(x => x.id === id); return p ? (p.
 const recs = () => D.records.filter(r => !r.deleted);
 const liveEvents = () => D.events.filter(e => !e.deleted).sort((a, b) => ts(b.start) - ts(a.start));
 const newSongId = () => { let id; do { id = 's_' + rand(8).toLowerCase(); } while (D.songs.some(s => s.id === id)); return id; };
+/** 要確認の印：写真添付後に編集／プレイ日時と受信時刻が72時間以上離れている／自動計算と不一致 */
+const gapHours = r => (ts(r.firstReceivedAt || r.receivedAt) - ts(r.playedAt)) / HOUR_MS;
+function flagsOf(r) {
+  const f = [];
+  if (r.editedAfterPhoto) f.push('<span class="badge b-warn">写真添付後に編集</span>');
+  if (gapHours(r) >= GAP_HOURS) f.push(`<span class="badge b-warn">日時ずれ${Math.floor(gapHours(r) / 24)}日</span>`);
+  if (r.mismatch) f.push('<span class="badge b-warn">計算不一致</span>');
+  return f.join('');
+}
+const needsCheck = r => r.editedAfterPhoto || gapHours(r) >= GAP_HOURS;
 
 /* ===================== 読み込み ===================== */
 async function loadAll() {
@@ -47,7 +63,7 @@ async function loadAll() {
   try {
     D = await api('adminGetAll', { adminKey }, 60000);
     try { localStorage.setItem(KEY_LS, adminKey); } catch (e) {}
-    if (!st.rankEvent) { const act = liveEvents().find(e => eventActive(e)) || liveEvents()[0]; st.rankEvent = act ? act.id : ''; }
+    if (!st.rankEvent) { const act = liveEvents().find(eventOpen) || liveEvents()[0]; st.rankEvent = act ? act.id : ''; }
     render();
   } catch (e) {
     if (e.code === 'admin') { adminKey = ''; try { localStorage.removeItem(KEY_LS); } catch (er) {} }
@@ -60,10 +76,10 @@ function render() {
     : D && serverOutdated(D.version) ? `<div class="banner err">⚠ ${esc(OUTDATED_MSG)}<br>（サーバー：${esc(D.version || '2.0以前')}／必要：${REQUIRED_SERVER}）</div>` : '';
   if (!D) return viewLogin();
   refreshOniBoth(D.songs);
-  const tabs = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー']];
-  $('#view').innerHTML = `<div class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${st.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="tabBody"></div>`;
-  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { st.tab = b.dataset.tab; st.detail = null; render(); });
-  ({ rank: viewRank, events: viewEvents, songs: viewSongs, players: viewPlayers })[st.tab]();
+  const need = recs().filter(needsCheck).length;
+  $('#view').innerHTML = `<div class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}" class="${st.tab === k ? 'on' : ''}">${l}${k === 'data' && need ? ` <span class="badge" style="color:#fff;border-color:#fff">${need}</span>` : ''}</button>`).join('')}</div><div id="tabBody"></div>`;
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { st.tab = b.dataset.tab; st.detail = null; render(); window.scrollTo(0, 0); });
+  ({ rank: viewRank, events: viewEvents, songs: viewSongs, players: viewPlayers, data: viewData, manage: viewManage })[st.tab]();
 }
 function viewLogin() {
   $('#view').innerHTML = `<div class="card" style="max-width:480px;margin:40px auto">
@@ -74,12 +90,63 @@ function viewLogin() {
   $('#login').onclick = () => { adminKey = $('#ak').value.trim(); if (adminKey) loadAll(); };
 }
 
+/* ===================== 共通操作：写真・却下 ===================== */
+async function showPhoto(photoId, r) {
+  const s = getSong(r.songId);
+  const m = showModal(`<h2>${esc(pname(r.playerId))}：${esc(songName(s))}</h2>
+    <div class="muted">登録スコア <b>${fmtN(r.score)}</b>（良${r.good}・可${r.ok}・不可${r.bad}・連打${r.roll}）・${fmtDate(r.playedAt)} プレイ</div>
+    <div id="ph" class="muted" style="margin-top:10px">写真を読み込んでいます…</div>`, true);
+  try {
+    let src = photoCache.get(photoId);
+    if (!src) { const res = await api('adminGetPhoto', { adminKey, photoId }, 60000); src = `data:${res.mime};base64,${res.data}`; photoCache.set(photoId, src); }
+    m.querySelector('#ph').innerHTML = `<img src="${src}" alt="" style="width:100%;border-radius:8px">`;
+  } catch (e) { m.querySelector('#ph').textContent = '写真を読み込めませんでした：' + e.message; }
+}
+/** 却下理由をテンプレートから選ぶ */
+function askReject() {
+  return new Promise(resolve => {
+    const m = showModal(`<h2>記録を却下</h2><div class="muted">ランキングの対象外にします（記録は消えません）。プレイヤーには次に開いたときに理由が通知されます。</div>
+      <div style="margin-top:8px">${REJECT_REASONS.map((t, i) => `<label class="chk"><input type="radio" name="rr" value="${esc(t)}"${i === 0 ? ' checked' : ''}> ${esc(t)}</label>`).join('')}
+      <label class="chk"><input type="radio" name="rr" value="__other"> その他</label>
+      <input id="rrOther" maxlength="100" placeholder="その他の理由（一言）" style="margin-top:6px"></div>
+      <button class="btn danger" id="rrOk" style="background:var(--danger);color:#fff">却下する</button>`);
+    m.querySelector('#rrOther').onfocus = () => { m.querySelector('input[value="__other"]').checked = true; };
+    m.querySelector('#rrOk').onclick = () => {
+      let v = m.querySelector('input[name=rr]:checked').value;
+      if (v === '__other') v = 'その他：' + (m.querySelector('#rrOther').value.trim() || '（記入なし）');
+      m.remove(); resolve(v);
+    };
+    m.querySelector('[data-close]').addEventListener('click', () => resolve(null));
+  });
+}
+async function setStatus(rid, status) {
+  let reason = null;
+  if (status === 'rejected') { reason = await askReject(); if (!reason) return; }
+  try {
+    const res = await api('adminSetStatus', { adminKey, recordId: rid, status, reason });
+    const i = D.records.findIndex(x => x.id === rid); if (i >= 0) D.records[i] = res.record;
+    D.results.forEach(x => { if (x.recordId === rid) x.status = res.status; });
+    toast(status === 'rejected' ? '却下しました' : '却下を取り消しました'); render();
+  } catch (e) { toast(e.message, 3000); }
+}
+function bindRecActions(root) {
+  (root || document).querySelectorAll('[data-photo]').forEach(b => b.onclick = () => {
+    const r = D.records.find(x => x.id === b.dataset.rid) || D.results.find(x => x.recordId === b.dataset.rid);
+    showPhoto(b.dataset.photo, r);
+  });
+  (root || document).querySelectorAll('[data-status]').forEach(b => b.onclick = () => setStatus(b.dataset.rid, b.dataset.status));
+}
+
 /* ===================== ランキング =====================
    「単位」＝順位をつける対象
     譜面単位：1譜面（大会の譜面モード／常設ランキング）
-    曲単位　：1曲の基準コースまでの全譜面。コースハンデ・連打補正後の最高スコアで比べる */
+    曲単位　：1曲の基準コースまでの全譜面。コースハンデ・連打補正後の最高スコアで比べる
+   確定済みの大会は、受付終了時点でコピーした結果（results）だけで順位をつける */
 const inPeriod = (r, ev) => !ev || (ts(r.playedAt) >= ts(ev.start) && ts(r.playedAt) <= ts(ev.end));
 const usable = r => !r.deleted && r.score != null && !!r.photoId && r.status !== 'rejected';
+const isFinal = ev => !!(ev && ev.finalizedAt);
+const snapRecs = (ev, withRemoved) => D.results.filter(x => x.eventId === ev.id && (withRemoved || !x.removed))
+  .map(x => ({ ...x, id: x.recordId, deleted: false, mismatch: false, scoreSource: '' }));
 function unitsFor(ev) {
   if (!ev) { const s = getSong(st.rankChart); return s ? [{ key: s.id, ids: new Set([s.id]), chart: s, cfg: null, allIds: new Set([s.id]) }] : []; }
   if (isMulti(ev)) return (ev.chartIds || []).map(getSong).filter(Boolean).map(s => ({ key: s.id, ids: new Set([s.id]), chart: s, cfg: null, allIds: new Set([s.id]) }));
@@ -87,15 +154,16 @@ function unitsFor(ev) {
     allIds: new Set(x.group.charts.map(c => c.id)) }));
 }
 function rankUnit(u, ev) {
-  const best = new Map(), plays = new Map();
+  const best = new Map(), plays = new Map(), fin = isFinal(ev);
   let noPhoto = 0, rejected = 0, aboveN = 0;
-  for (const r of recs()) {
-    if (!u.allIds.has(r.songId) || !inPeriod(r, ev)) continue;
+  for (const r of fin ? snapRecs(ev) : recs()) {
+    if (!u.allIds.has(r.songId) || (!fin && !inPeriod(r, ev))) continue;
     if (!u.ids.has(r.songId)) { aboveN++; continue; } // 基準コースより上：保存のみ
     plays.set(r.playerId, (plays.get(r.playerId) || 0) + 1);
     if (r.status === 'rejected') rejected++; else if (!r.photoId) noPhoto++;
-    if (!usable(r)) continue;
-    const chart = getSong(r.songId);
+    // 確定結果は締切時に確認済み、または管理者が追加したものなので写真の有無は問わない
+    if (fin ? (r.score == null || r.status === 'rejected') : !usable(r)) continue;
+    const chart = getSong(r.songId); if (!chart) continue;
     const adj = adjScore(r, chart.course, u.cfg);
     const cur = best.get(r.playerId);
     if (!cur || adj > cur.adj || (adj === cur.adj && ts(r.playedAt) < ts(cur.r.playedAt))) best.set(r.playerId, { r, adj, chart });
@@ -127,12 +195,14 @@ function viewRank() {
   if (st.rankMode === 'all' && !st.rankChart && chartsWithRecs[0]) st.rankChart = chartsWithRecs[0].id;
   let body = '';
   if (st.rankMode === 'event') {
-    if (!ev) body = `<div class="card muted">大会がありません。「大会」タブで作成してください。</div>`;
+    if (!ev) body = `<div class="card muted">大会がありません。「大会」メニューで作成してください。</div>`;
     else {
-      const total = rankTotal(ev);
+      const total = rankTotal(ev), phase = eventState(ev);
       body = `<div class="card"><div class="evrow"><div><h2 style="margin:0">${esc(ev.name)} ${eventBadges(ev)}</h2>
         <div class="muted">${fmtDate(ev.start)} 〜 ${fmtDate(ev.end)}・${isMulti(ev) ? `課題${total.total}譜面` : `課題${total.total}曲（曲単位・補正後スコア）`}</div></div>
         <button class="btn small" data-img="total">総合の画像</button></div>
+        ${isFinal(ev) ? `<div class="snapnote">🔒 <b>結果確定済み</b>（${fmtDate(ev.finalizedAt)}）。受付終了時点のランキング対象リザルト ${snapRecs(ev).length}件のコピーで順位をつけています。プレイヤーが記録を編集しても変わりません。修正は申告を受けて、下の表の「修正」「除外」で行ってください。</div>`
+          : phase === '受付中' ? `<div class="snapnote">⏳ 大会期間は終了しました。${fmtDate(new Date(eventCloseAt(ev)))} にリザルト受付を締め切り、その時点の結果を確定します。</div>` : ''}
         ${total.total > 1 ? `<h3>総合（課題ごとのランキング対象ベストの合計）</h3>${totalTable(total)}` : ''}</div>` +
         unitsFor(ev).map(u => unitCard(u, ev)).join('');
     }
@@ -155,7 +225,12 @@ function viewRank() {
   document.querySelectorAll('input[name=rm]').forEach(i => i.onchange = () => { st.rankMode = i.value; render(); });
   if ($('#evSel')) $('#evSel').onchange = e => { st.rankEvent = e.target.value; render(); };
   if ($('#chSel')) $('#chSel').onchange = e => { st.rankChart = e.target.value; render(); };
-  bindRankActions(ev);
+  document.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => { st.detail = st.detail === b.dataset.detail ? null : b.dataset.detail; render(); });
+  document.querySelectorAll('[data-img]').forEach(b => b.onclick = () => openImage(b.dataset.img, ev));
+  document.querySelectorAll('[data-fix]').forEach(b => b.onclick = () => editResult(ev, b.dataset.fix));
+  document.querySelectorAll('[data-excl]').forEach(b => b.onclick = () => saveResult(ev, b.dataset.excl, { removed: b.dataset.v === '1' }));
+  document.querySelectorAll('[data-addres]').forEach(b => b.onclick = () => addResult(ev, b.dataset.addres));
+  bindRecActions();
 }
 function totalTable(t) {
   if (!t.rows.length) return '<div class="muted">まだ対象記録がありません。</div>';
@@ -164,7 +239,15 @@ function totalTable(t) {
       <td class="n"><b>${fmtN(r.sum)}</b></td><td class="n">${r.n}/${t.total}</td></tr>`).join('') + `</table></div>`;
 }
 const scoreCell = (x, showRaw) => `<b>${fmtN(x.adj)}</b>${showRaw && x.adj !== x.r.score ? `<span class="raw">素点 ${fmtN(x.r.score)}</span>` : ''}` +
-  (x.r.mismatch ? '<span class="badge b-warn">計算不一致</span>' : '') + (x.r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '');
+  (x.r.mismatch ? '<span class="badge b-warn">計算不一致</span>' : '') + (x.r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
+  (x.r.editedAt ? `<span class="badge b-ka" title="${esc(x.r.note || '')}">管理者修正</span>` : '');
+function rowActions(r, ev) {
+  const fin = isFinal(ev);
+  return `<div class="row" style="flex-wrap:nowrap">
+    <button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button>
+    ${fin ? `<button class="btn sub small" data-fix="${esc(r.id)}">修正</button><button class="btn sub small danger" data-excl="${esc(r.id)}" data-v="1">除外</button>` : ''}
+    <button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button></div>`;
+}
 function unitCard(u, ev) {
   const res = rankUnit(u, ev), song = !u.chart;
   return `<div class="card">
@@ -177,54 +260,80 @@ function unitCard(u, ev) {
         <td class="n">${scoreCell(x, song)}</td>
         <td class="n"><span class="j-good">${x.r.good}</span>/<span class="j-ok">${x.r.ok}</span>/<span class="j-bad">${x.r.bad}</span>/<span class="j-roll">${x.r.roll}</span></td>
         <td class="muted">${fmtDate(x.r.playedAt)}</td><td class="n">${res.plays.get(x.r.playerId) || 0}</td>
-        <td><div class="row" style="flex-wrap:nowrap"><button class="btn sub small" data-photo="${esc(x.r.photoId)}" data-rid="${esc(x.r.id)}">写真</button><button class="btn sub small danger" data-status="rejected" data-rid="${esc(x.r.id)}">却下</button></div></td></tr>`).join('') +
+        <td>${rowActions(x.r, ev)}</td></tr>`).join('') +
       `</table></div>` : '<div class="muted">まだランキング対象の記録がありません。</div>'}
     ${st.detail === u.key ? detailTable(u, ev) : ''}
   </div>`;
 }
-/** 期間内の全記録（写真なし・却下・対象外コースも含む） */
+/** 全記録。確定前：期間内の全記録（写真なし・却下・対象外コースも）／確定後：確定結果（除外分も）＋結果に入っていない期間内の記録 */
 function detailTable(u, ev) {
-  const list = recs().filter(r => u.allIds.has(r.songId) && inPeriod(r, ev)).sort((a, b) => (b.score || 0) - (a.score || 0));
-  const song = !u.chart;
-  return `<h3>全記録（${list.length}件）</h3><div class="tblwrap"><table class="rank"><tr><th>プレイヤー</th>${song ? '<th>コース</th>' : ''}<th class="n">スコア</th><th class="n">良/可/不可/連打</th><th>日時</th><th>状態</th><th></th></tr>` +
-    list.map(r => {
-      const c = getSong(r.songId), inUnit = u.ids.has(r.songId), adj = inUnit ? adjScore(r, c.course, u.cfg) : null;
-      return `<tr class="${r.status === 'rejected' ? 'rej' : ''}"><td>${esc(pname(r.playerId))}</td>
-      ${song ? `<td class="cc-${c.course}"><b style="color:var(--cc)">${esc(cshort(c))}</b></td>` : ''}
+  const song = !u.chart, fin = isFinal(ev);
+  const head = `<tr><th>プレイヤー</th>${song ? '<th>コース</th>' : ''}<th class="n">スコア</th><th class="n">良/可/不可/連打</th><th>プレイ日時</th><th>状態</th><th></th></tr>`;
+  const cells = (r, stateHtml, act) => {
+    const c = getSong(r.songId), inUnit = u.ids.has(r.songId), adj = inUnit && c ? adjScore(r, c.course, u.cfg) : null;
+    return `<tr class="${r.status === 'rejected' || r.removed ? 'rej' : ''}"><td>${esc(pname(r.playerId))}</td>
+      ${song ? `<td class="cc-${c ? c.course : ''}"><b style="color:var(--cc)">${c ? esc(cshort(c)) : '?'}</b></td>` : ''}
       <td class="n">${fmtN(song && inUnit ? adj : r.score)}${song && inUnit && adj !== r.score ? `<span class="raw">素点 ${fmtN(r.score)}</span>` : ''}</td>
-      <td class="n">${r.good}/${r.ok}/${r.bad}/${r.roll}</td><td class="muted">${fmtDate(r.playedAt)}</td>
-      <td>${!inUnit ? '<span class="badge b-mute">対象外コース</span>' : r.status === 'rejected' ? '<span class="badge b-ng">却下</span>' : r.photoId ? '<span class="badge b-ok">写真あり</span>' : '<span class="badge b-mute">写真なし</span>'}</td>
-      <td><div class="row" style="flex-wrap:nowrap">${r.photoId ? `<button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button>` : ''}
-      ${r.status === 'rejected' ? `<button class="btn sub small" data-status="ok" data-rid="${esc(r.id)}">却下を取消</button>` : `<button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button>`}</div></td></tr>`;
-    }).join('') + `</table></div>`;
+      <td class="n">${r.good}/${r.ok}/${r.bad}/${r.roll}</td><td class="muted">${fmtDate(r.playedAt)}</td><td>${stateHtml}</td><td><div class="row" style="flex-wrap:nowrap">${act}</div></td></tr>`;
+  };
+  const photoBtn = r => r.photoId ? `<button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button>` : '';
+  const stBtn = r => r.status === 'rejected' ? `<button class="btn sub small" data-status="ok" data-rid="${esc(r.id)}">却下を取消</button>` : `<button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button>`;
+  if (!fin) {
+    const list = recs().filter(r => u.allIds.has(r.songId) && inPeriod(r, ev)).sort((a, b) => (b.score || 0) - (a.score || 0));
+    return `<h3>全記録（${list.length}件）</h3><div class="tblwrap"><table class="rank">${head}` + list.map(r => cells(r,
+      (!u.ids.has(r.songId) ? '<span class="badge b-mute">対象外コース</span>' : r.status === 'rejected' ? `<span class="badge b-ng">却下</span><span class="raw">${esc(r.rejectReason)}</span>` : r.photoId ? '<span class="badge b-ok">写真あり</span>' : '<span class="badge b-mute">写真なし</span>') + flagsOf(r),
+      photoBtn(r) + stBtn(r))).join('') + `</table></div>`;
+  }
+  const snap = snapRecs(ev, true).filter(r => u.allIds.has(r.songId)).sort((a, b) => (b.score || 0) - (a.score || 0));
+  const inSnap = new Set(snap.map(r => r.id));
+  const outside = recs().filter(r => u.allIds.has(r.songId) && inPeriod(r, ev) && !inSnap.has(r.id));
+  return `<h3>確定結果（${snap.length}件）</h3><div class="tblwrap"><table class="rank">${head}` + snap.map(r => cells(r,
+      (r.removed ? '<span class="badge b-mute">除外</span>' : r.status === 'rejected' ? '<span class="badge b-ng">却下</span>' : '<span class="badge b-ok">対象</span>') +
+      (r.editedAt ? `<span class="badge b-ka">修正 ${fmtDay(r.editedAt)}</span>` : '') + (r.note ? `<span class="raw">${esc(r.note)}</span>` : ''),
+      photoBtn(r) + `<button class="btn sub small" data-fix="${esc(r.id)}">修正</button>` +
+      (r.removed ? `<button class="btn sub small" data-excl="${esc(r.id)}" data-v="0">除外を戻す</button>` : `<button class="btn sub small danger" data-excl="${esc(r.id)}" data-v="1">除外</button>`) + stBtn(r))).join('') + `</table></div>
+    ${outside.length ? `<h3>確定結果に入っていない期間内の記録（${outside.length}件）</h3>
+      <div class="muted">写真なし・却下・受付締切後の登録など。申告を受けて結果に加える場合は「結果に追加」を押してください。</div>
+      <div class="tblwrap"><table class="rank">${head}` + outside.map(r => cells(r,
+        (r.photoId ? '<span class="badge b-mute">写真あり</span>' : '<span class="badge b-mute">写真なし</span>') + (r.status === 'rejected' ? '<span class="badge b-ng">却下</span>' : '') +
+        (ts(r.firstReceivedAt || r.receivedAt) > eventCloseAt(ev) ? '<span class="badge b-warn">締切後に登録</span>' : '') + flagsOf(r),
+        photoBtn(r) + `<button class="btn sub small" data-addres="${esc(r.id)}">結果に追加</button>`)).join('') + `</table></div>` : ''}`;
 }
-function bindRankActions(ev) {
-  document.querySelectorAll('[data-detail]').forEach(b => b.onclick = () => { st.detail = st.detail === b.dataset.detail ? null : b.dataset.detail; render(); });
-  document.querySelectorAll('[data-photo]').forEach(b => b.onclick = () => showPhoto(b.dataset.photo, b.dataset.rid));
-  document.querySelectorAll('[data-status]').forEach(b => b.onclick = () => setStatus(b.dataset.rid, b.dataset.status));
-  document.querySelectorAll('[data-img]').forEach(b => b.onclick = () => openImage(b.dataset.img, ev));
+/* ----- 確定結果の修正 ----- */
+function editResult(ev, rid) {
+  const x = D.results.find(y => y.eventId === ev.id && y.recordId === rid); if (!x) return;
+  const c = getSong(x.songId);
+  const m = showModal(`<h2>確定結果を修正</h2>
+    <div class="muted">${esc(pname(x.playerId))}：${esc(songName(c))}・${fmtDate(x.playedAt)} プレイ<br>プレイヤーの記録自体は変わりません（大会結果だけを修正します）。</div>
+    <div class="grid2 judge">
+      <div><label class="j-good">良</label><input id="eg" type="number" min="0" value="${x.good}"></div>
+      <div><label class="j-ok">可</label><input id="eo" type="number" min="0" value="${x.ok}"></div>
+      <div><label class="j-bad">不可</label><input id="eb" type="number" min="0" value="${x.bad}"></div>
+      <div><label class="j-roll">連打</label><input id="er" type="number" min="0" value="${x.roll}"></div></div>
+    <label>スコア</label><div class="row" style="flex-wrap:nowrap"><input id="es" type="number" min="0" value="${x.score ?? ''}">
+      ${c && c.shoko ? '<button class="btn sub small" id="eCalc">自動計算</button>' : ''}</div>
+    <label>修正メモ（任意）</label><input id="en" maxlength="200" value="${esc(x.note || '')}" placeholder="例：申告によりスコアを修正">
+    <button class="btn" id="eSave">保存</button>`);
+  const v = id => n0(m.querySelector(id).value);
+  if (m.querySelector('#eCalc')) m.querySelector('#eCalc').onclick = () => { m.querySelector('#es').value = calcScore(c.shoko, v('#eg'), v('#eo'), v('#er')); };
+  m.querySelector('#eSave').onclick = async () => {
+    await saveResult(ev, rid, { good: v('#eg'), ok: v('#eo'), bad: v('#eb'), roll: v('#er'), score: nn(m.querySelector('#es').value), note: m.querySelector('#en').value.trim() });
+    m.remove();
+  };
 }
-async function showPhoto(photoId, rid) {
-  const r = D.records.find(x => x.id === rid), s = r && getSong(r.songId);
-  const m = showModal(`<h2>${esc(pname(r.playerId))}：${esc(songName(s))}</h2>
-    <div class="muted">登録スコア <b>${fmtN(r.score)}</b>（良${r.good}・可${r.ok}・不可${r.bad}・連打${r.roll}）・${fmtDate(r.playedAt)}</div>
-    <div id="ph" class="muted" style="margin-top:10px">写真を読み込んでいます…</div>
-    <div class="row" style="margin-top:10px">${r.status === 'rejected' ? `<button class="btn sub small" id="mOk">却下を取消</button>` : `<button class="btn sub small danger" id="mNg">この記録を却下</button>`}</div>`, true);
-  const b1 = m.querySelector('#mOk'), b2 = m.querySelector('#mNg');
-  if (b1) b1.onclick = () => { m.remove(); setStatus(rid, 'ok'); };
-  if (b2) b2.onclick = () => { m.remove(); setStatus(rid, 'rejected'); };
+async function saveResult(ev, rid, fields) {
   try {
-    let src = photoCache.get(photoId);
-    if (!src) { const res = await api('adminGetPhoto', { adminKey, photoId }, 60000); src = `data:${res.mime};base64,${res.data}`; photoCache.set(photoId, src); }
-    m.querySelector('#ph').innerHTML = `<img src="${src}" alt="" style="width:100%;border-radius:8px">`;
-  } catch (e) { m.querySelector('#ph').textContent = '写真を読み込めませんでした：' + e.message; }
+    const res = await api('adminEditResult', Object.assign({ adminKey, eventId: ev.id, recordId: rid }, fields));
+    const i = D.results.findIndex(y => y.id === res.result.id); if (i >= 0) D.results[i] = res.result;
+    toast(fields.removed === true ? '除外しました' : fields.removed === false ? '除外を戻しました' : '修正しました'); render();
+  } catch (e) { toast(e.message, 3000); }
 }
-async function setStatus(rid, status) {
-  if (status === 'rejected' && !confirm('この記録を却下してランキングから外しますか？（記録自体は消えません）')) return;
+async function addResult(ev, rid) {
+  if (!confirm('この記録を確定結果に追加しますか？')) return;
   try {
-    await api('adminSetStatus', { adminKey, recordId: rid, status });
-    const r = D.records.find(x => x.id === rid); if (r) r.status = status;
-    toast(status === 'rejected' ? '却下しました' : '却下を取り消しました'); render();
+    const res = await api('adminAddResult', { adminKey, eventId: ev.id, recordId: rid });
+    const i = D.results.findIndex(y => y.id === res.result.id); if (i >= 0) D.results[i] = res.result; else D.results.push(res.result);
+    toast('確定結果に追加しました'); render();
   } catch (e) { toast(e.message, 3000); }
 }
 
@@ -291,21 +400,22 @@ function openImage(key, ev) {
   let opt, fname;
   const evTitle = ev ? ev.name : '常設ランキング';
   const period = ev ? `${fmtDate(ev.start)} 〜 ${fmtDate(ev.end)}` : '全期間';
+  const tag = isFinal(ev) ? '・結果確定' : '';
   const safe = s => s.replace(/[\\/:*?"<>|\s]/g, '_').slice(0, 30);
   if (key === 'total') {
     const t = rankTotal(ev);
-    opt = { title: `${evTitle}　総合結果`, subtitle: `${period}・課題${t.total}${isMulti(ev) ? '譜面' : '曲'}の合計${isMulti(ev) ? '' : '（補正後）'}スコア`,
+    opt = { title: `${evTitle}　総合結果`, subtitle: `${period}・課題${t.total}${isMulti(ev) ? '譜面' : '曲'}の合計${isMulti(ev) ? '' : '（補正後）'}スコア${tag}`,
       rows: t.rows.map(r => ({ rank: r._rank, name: pname(r.playerId), score: fmtN(r.sum), detail: `提出 ${r.n}/${t.total}` })) };
     fname = `ranking_${ymd(new Date())}_total.png`;
   } else {
     const u = unitsFor(ev).find(x => x.key === key); if (!u) return;
     const res = rankUnit(u, ev);
     if (u.chart) {
-      opt = { title: evTitle, chart: u.chart, footer: `${period}・太鼓スコア記録`,
+      opt = { title: evTitle, chart: u.chart, footer: `${period}${tag}・太鼓スコア記録`,
         rows: res.rows.map(x => ({ rank: x._rank, name: pname(x.r.playerId), score: fmtN(x.adj), detail: `良${x.r.good} 可${x.r.ok} 不可${x.r.bad}` })) };
       fname = `ranking_${ymd(new Date())}_${safe(u.chart.title)}_${u.chart.course}.png`;
     } else {
-      opt = { title: evTitle, footer: `${period}・補正後スコアで順位づけ・太鼓スコア記録`,
+      opt = { title: evTitle, footer: `${period}${tag}・補正後スコアで順位づけ・太鼓スコア記録`,
         song: { title: u.group.title, sub: `基準 ${cname({ course: u.cfg.base, title: u.group.title })} まで${u.cfg.hcOn ? '・ハンデあり' : ''}` },
         rows: res.rows.map(x => ({ rank: x._rank, name: pname(x.r.playerId), score: fmtN(x.adj), course: { c: x.chart.course, label: cshort(x.chart) },
           detail: x.adj !== x.r.score ? `素点 ${fmtN(x.r.score)}` : `良${x.r.good} 可${x.r.ok} 不可${x.r.bad}` })) };
@@ -329,9 +439,10 @@ function viewEvents() {
   const f = st.eventForm, evs = liveEvents();
   $('#tabBody').innerHTML = (f ? eventFormHtml(f) : `<button class="btn" id="evNew" style="margin:0 0 12px">＋ 大会を追加</button>`) + `
   <div class="card"><h2>大会一覧</h2>
+    <div class="muted" style="margin-bottom:8px">大会終了から${CLOSE_HOURS}時間はリザルト受付期間です（期間内にプレイした記録の登録・写真追加のみ）。締切時点のランキング対象リザルトをコピーして結果を確定します。</div>
     ${evs.length ? `<div class="list">${evs.map(e => `<div class="item"><div class="evrow"><div>
       <strong>${esc(e.name)}</strong> ${eventBadges(e)}
-      <div class="muted">${fmtDate(e.start)} 〜 ${fmtDate(e.end)}・${isMulti(e) ? `課題${(e.chartIds || []).length}譜面` : `曲単位・課題${(e.songCfg || []).length}曲`}</div>
+      <div class="muted">${fmtDate(e.start)} 〜 ${fmtDate(e.end)}・${isMulti(e) ? `課題${(e.chartIds || []).length}譜面` : `曲単位・課題${(e.songCfg || []).length}曲`}${e.finalizedAt ? `・確定 ${fmtDate(e.finalizedAt)}` : ''}</div>
       <div>${eventSummary(e)}</div></div>
       <div class="row" style="flex-wrap:nowrap"><button class="btn sub small" data-evrank="${e.id}">ランキング</button><button class="btn sub small" data-evedit="${e.id}">編集</button></div></div></div>`).join('')}</div>`
       : '<div class="muted">まだ大会はありません。</div>'}
@@ -339,13 +450,13 @@ function viewEvents() {
   if (f) bindEventForm(f);
   else $('#evNew').onclick = () => {
     const s = new Date(); s.setSeconds(0, 0);
-    const e = new Date(s.getTime() + 14 * 86400000); e.setHours(23, 59, 0, 0);
+    const e = new Date(s.getTime() + 14 * DAY_MS); e.setHours(23, 59, 0, 0);
     st.eventForm = { id: '', name: '', start: toLocalInput(s), end: toLocalInput(e), note: '', multi: true, chartIds: new Set(), songs: [] }; render();
   };
   document.querySelectorAll('[data-evedit]').forEach(b => b.onclick = () => {
     const e = D.events.find(x => x.id === b.dataset.evedit);
     st.eventForm = { id: e.id, name: e.name, start: toLocalInput(new Date(e.start)), end: toLocalInput(new Date(e.end)), note: e.note || '',
-      multi: isMulti(e), chartIds: new Set(e.chartIds || []),
+      multi: isMulti(e), chartIds: new Set(e.chartIds || []), finalized: !!e.finalizedAt,
       songs: resolveEventSongs(e, D.songs).map(x => ({ title: x.group.title, base: x.cfg.base, hcOn: !!x.cfg.hcOn, hc: { ...x.cfg.hc }, roll: { ...x.cfg.roll } })) };
     render(); window.scrollTo(0, 0);
   });
@@ -353,9 +464,11 @@ function viewEvents() {
 }
 function eventFormHtml(f) {
   return `<div class="card"><h2>${f.id ? '大会を編集' : '大会を追加'}</h2>
+    ${f.finalized ? '<div class="snapnote">🔒 この大会は結果確定済みです。課題や設定を変えると、確定結果の表示も変わります（確定結果のコピー自体は残ります）。終了日時を延長して受付期間に戻すと、次の締切で改めて確定します。</div>' : ''}
     <label>大会名</label><input id="evName" value="${esc(f.name)}" maxlength="60" autocomplete="off">
     <div class="grid2"><div><label>開始</label><input id="evStart" type="datetime-local" value="${f.start}"></div>
       <div><label>終了</label><input id="evEnd" type="datetime-local" value="${f.end}"></div></div>
+    <div class="muted">リザルト受付の締切は、終了の${CLOSE_HOURS}時間後です。</div>
     <label>説明（任意・プレイヤー画面に表示）</label><input id="evNote" value="${esc(f.note)}" maxlength="200" autocomplete="off">
     <label class="chk"><input type="checkbox" id="evMulti"${f.multi ? ' checked' : ''}> 同一曲の複数コースを対象にする</label>
     <div class="muted">ON：選んだ譜面ごとに順位をつけます。OFF：曲を選び、基準コースまでのどのコースでも提出でき、ハンデ補正後の最高スコアをその曲の記録にします。</div>
@@ -437,7 +550,6 @@ function bindEventForm(f) {
     const gm = groupMap();
     const songCfg = f.songs.map(it => {
       const g = gm.get(it.title); if (!g) return null;
-      // 表示中の値（未入力なら初期値）で確定して保存
       const hc = {}, roll = {};
       g.charts.forEach(c => { if (courseIdx(c.course) > courseIdx(it.base)) return;
         hc[c.course] = it.hc[c.course] ?? defaultHc(it.base, c.course); roll[c.course] = it.roll[c.course] ?? defaultRoll(it.base, c.course); });
@@ -490,8 +602,8 @@ function renderSongList() {
     const n = g.charts.reduce((a, c) => a + (cnt.get(c.id) || 0), 0);
     const byPlayer = g.charts.filter(c => c.createdBy && c.createdBy !== 'admin');
     const links = g.charts.filter(c => c.wikiUrl || c.videoUrl).length;
-    return `<div class="item" data-t="${esc(g.title)}"><div class="row between" style="flex-wrap:nowrap"><div style="min-width:0"><strong>${esc(g.title)}</strong>
-      <div class="muted">${genreTag(g.genre)}${songMeta(g)}<span class="meta">記録${n}件</span>${links ? `<span class="meta">🔗${links}</span>` : ''}${byPlayer.length ? `<span class="meta">👤 ${byPlayer.map(c => esc(cshort(c)) + '：' + esc(c.createdBy)).join('、')}</span>` : ''}</div></div>
+    const extra = `<span class="meta">記録${n}件</span>${links ? `<span class="meta">🔗${links}</span>` : ''}${byPlayer.length ? `<span class="meta">👤 ${byPlayer.map(c => esc(cshort(c)) + '：' + esc(c.createdBy)).join('、')}</span>` : ''}`;
+    return `<div class="item" data-t="${esc(g.title)}"><div class="row between" style="flex-wrap:nowrap;align-items:flex-start">${songHead(g, extra)}
       <button type="button" class="btn sub small" data-group="1">曲情報</button></div>${courseButtons(g, null, 'list')}</div>`;
   }).join('') + (gs.length > 300 ? `<div class="muted">ほか${gs.length - 300}曲は絞り込んでください</div>` : '') || '<div class="muted">楽曲がありません。</div>';
   document.querySelectorAll('#songList .item[data-t]').forEach(item => {
@@ -638,8 +750,9 @@ function viewPlayers() {
   const dups = [...byDev.values()].filter(a => a.length > 1);
   const stat = new Map();
   recs().forEach(r => {
-    const s = stat.get(r.playerId) || { n: 0, photo: 0, last: 0 };
-    s.n++; if (r.photoId && r.status !== 'rejected') s.photo++; s.last = Math.max(s.last, ts(r.playedAt)); stat.set(r.playerId, s);
+    const s = stat.get(r.playerId) || { n: 0, photo: 0, last: 0, need: 0 };
+    s.n++; if (r.photoId && r.status !== 'rejected') s.photo++; if (needsCheck(r)) s.need++;
+    s.last = Math.max(s.last, ts(r.playedAt)); stat.set(r.playerId, s);
   });
   const ps = [...D.players].sort((a, b) => (stat.get(b.id)?.last || 0) - (stat.get(a.id)?.last || 0));
   $('#tabBody').innerHTML = `
@@ -647,30 +760,140 @@ function viewPlayers() {
     ${dups.map(a => `<div>${a.map(id => `@${esc(id)}`).join('、')}</div>`).join('')}
     <div class="muted">家族や友人と端末を共有している場合もあるため、警告のみです。</div></div>` : ''}
   <div class="card"><h2>プレイヤー（${D.players.length}人）</h2>
-    <div class="tblwrap"><table class="rank"><tr><th>ID</th><th>表示名</th><th class="n">記録</th><th class="n">写真付き</th><th>最終プレイ</th><th>端末ID</th><th></th></tr>
-    ${ps.map(p => { const s = stat.get(p.id) || { n: 0, photo: 0, last: 0 }; const dup = (byDev.get(p.deviceId) || []).length > 1;
-      return `<tr><td>@${esc(p.id)}</td><td>${esc(p.name)}</td><td class="n">${s.n}</td><td class="n">${s.photo}</td><td class="muted">${s.last ? fmtDate(new Date(s.last)) : '-'}</td>
+    <div class="tblwrap"><table class="rank"><tr><th>ID</th><th>表示名</th><th class="n">記録</th><th class="n">写真付き</th><th class="n">要確認</th><th>最終プレイ</th><th>端末ID</th><th></th></tr>
+    ${ps.map(p => { const s = stat.get(p.id) || { n: 0, photo: 0, last: 0, need: 0 }; const dup = (byDev.get(p.deviceId) || []).length > 1;
+      return `<tr><td>@${esc(p.id)}</td><td>${esc(p.name)}</td><td class="n">${s.n}</td><td class="n">${s.photo}</td>
+      <td class="n">${s.need ? `<button class="btn sub small" data-pcheck="${esc(p.id)}">${s.need}件</button>` : '0'}</td>
+      <td class="muted">${s.last ? fmtDate(new Date(s.last)) : '-'}</td>
       <td class="muted">${esc(p.deviceId || '-')}${dup ? '<span class="badge b-warn">重複</span>' : ''}</td>
       <td>${p.registered ? `<button class="btn sub small" data-reset="${esc(p.id)}">引き継ぎリセット</button>` : '<span class="badge b-warn">再登録待ち</span>'}</td></tr>`; }).join('')}
     </table></div>
     <div class="muted" style="margin-top:8px">「引き継ぎリセット」は、プレイヤーが引き継ぎコードを失くしたときに使います。リセット後、本人が同じIDで登録し直すと、過去の記録も引き継げます。</div>
-  </div>
-  <div class="card"><h2>データの保管場所</h2>
-    <div class="muted">記録・楽曲・大会はスプレッドシート、写真はGoogleドライブのフォルダに保存されています。</div>
-    <a class="btn sub" href="${esc(D.photoFolderUrl)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">写真フォルダを開く</a>
-    <button class="btn sub" id="allExp">全データをJSONで書き出す（バックアップ）</button></div>`;
+  </div>`;
+  document.querySelectorAll('[data-pcheck]').forEach(b => b.onclick = () => { st.tab = 'data'; st.dataPlayer = b.dataset.pcheck; st.dataFlag = 'need'; render(); });
   document.querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
     const id = b.dataset.reset;
     if (!confirm(`@${id} の引き継ぎコードを無効にします。\n本人が同じIDで登録し直すまで、その端末からは送信できなくなります。よろしいですか？`)) return;
     try { await api('adminResetPlayer', { adminKey, playerId: id }); const p = D.players.find(x => x.id === id); if (p) p.registered = false; toast('リセットしました'); render(); }
     catch (e) { toast(e.message, 3000); }
   });
-  $('#allExp').onclick = () => download(`taiko_all_${ymd(new Date())}.json`, JSON.stringify({ app: APP, schema: SCHEMA, kind: 'admin-backup', exportedAt: isoLocal(),
-    players: D.players, songs: D.songs, records: D.records, events: D.events }, null, 2));
+}
+
+/* ===================== スコアデータ =====================
+   全記録の確認。要確認（写真添付後の編集・日時ずれ）、却下、削除済み（復元・完全削除）など */
+const DATA_FLAGS = {
+  need: '要確認（写真添付後に編集・日時ずれ）', all: 'すべての記録', edit: '写真添付後に編集', gap: `日時ずれ（${GAP_HOURS}時間以上）`,
+  mismatch: '自動計算と不一致', rejected: '却下', nophoto: '写真なし', deleted: '削除済み'
+};
+function viewData() {
+  const all = D.records;
+  const t = st.dataQ.trim().toLowerCase();
+  const pass = r => {
+    if (st.dataPlayer && r.playerId !== st.dataPlayer) return false;
+    if (t) { const s = getSong(r.songId); if (!(s ? s.title : '楽曲未選択').toLowerCase().includes(t)) return false; }
+    switch (st.dataFlag) {
+      case 'need': return !r.deleted && needsCheck(r);
+      case 'edit': return !r.deleted && r.editedAfterPhoto;
+      case 'gap': return !r.deleted && gapHours(r) >= GAP_HOURS;
+      case 'mismatch': return !r.deleted && r.mismatch;
+      case 'rejected': return !r.deleted && r.status === 'rejected';
+      case 'nophoto': return !r.deleted && !r.photoId;
+      case 'deleted': return r.deleted;
+      default: return !r.deleted;
+    }
+  };
+  const list = all.filter(pass).sort((a, b) => ts(b.receivedAt) - ts(a.receivedAt));
+  const cnt = k => all.filter(r => { const o = st.dataFlag; st.dataFlag = k; const v = pass(r); st.dataFlag = o; return v; }).length;
+  const restoreLeftDays = r => Math.ceil((RESTORE_DAYS * DAY_MS - (Date.now() - ts(r.deletedAt || r.updatedAt))) / DAY_MS);
+  $('#tabBody').innerHTML = `
+  <div class="card"><h2>スコアデータ</h2>
+    <div class="filters">
+      <select id="dFlag">${Object.entries(DATA_FLAGS).map(([k, v]) => `<option value="${k}"${st.dataFlag === k ? ' selected' : ''}>${v}（${cnt(k)}）</option>`).join('')}</select>
+      <select id="dPlayer"><option value="">すべてのプレイヤー</option>${D.players.map(p => `<option value="${esc(p.id)}"${st.dataPlayer === p.id ? ' selected' : ''}>${esc(p.name)} @${esc(p.id)}</option>`).join('')}</select>
+      <input id="dQ" type="search" placeholder="曲名で絞り込み" value="${esc(st.dataQ)}">
+    </div>
+    <div class="muted" style="margin-top:8px">「日時ずれ」は、プレイ日時とサーバーが最初に受け取った時刻が${GAP_HOURS}時間以上離れている記録です（電波の都合で送信が遅れた場合も含みます）。削除済みの記録は、削除から${RESTORE_DAYS}日まではプレイヤーが自分で復元できます。</div>
+  </div>
+  <div class="card"><h2>${esc(DATA_FLAGS[st.dataFlag])}（${list.length}件${list.length > 300 ? '・新しい300件を表示' : ''}）</h2>
+    ${list.length ? `<div class="tblwrap"><table class="rank"><tr><th>受信</th><th>プレイヤー</th><th>譜面</th><th class="n">スコア</th><th class="n">良/可/不可/連打</th><th>プレイ日時</th><th>状態</th><th></th></tr>
+    ${list.slice(0, 300).map(r => { const s = getSong(r.songId);
+      const stHtml = (r.deleted ? `<span class="badge b-mute">削除 ${fmtDay(r.deletedAt || r.updatedAt)}</span>${restoreLeftDays(r) > 0 ? `<span class="raw">本人が復元可（あと${restoreLeftDays(r)}日）</span>` : ''}`
+        : r.status === 'rejected' ? `<span class="badge b-ng">却下</span><span class="raw">${esc(r.rejectReason)}</span>` : r.photoId ? '<span class="badge b-ok">写真あり</span>' : '<span class="badge b-mute">写真なし</span>') + flagsOf(r);
+      const act = r.deleted
+        ? `<button class="btn sub small" data-restore="${esc(r.id)}">復元</button><button class="btn sub small danger" data-purge="${esc(r.id)}">完全削除</button>`
+        : (r.photoId ? `<button class="btn sub small" data-photo="${esc(r.photoId)}" data-rid="${esc(r.id)}">写真</button>` : '') +
+          (r.status === 'rejected' ? `<button class="btn sub small" data-status="ok" data-rid="${esc(r.id)}">却下を取消</button>` : `<button class="btn sub small danger" data-status="rejected" data-rid="${esc(r.id)}">却下</button>`);
+      return `<tr class="${r.deleted ? 'rej' : ''}"><td class="muted">${fmtDay(r.receivedAt)}</td><td>${esc(pname(r.playerId))}</td>
+        <td>${s ? `<span class="cc-${s.course}" style="color:var(--cc);font-weight:700">${esc(cshort(s))}</span> ${esc(s.title)}` : '楽曲未選択'}</td>
+        <td class="n"><b>${fmtN(r.score)}</b></td><td class="n">${r.good}/${r.ok}/${r.bad}/${r.roll}</td><td class="muted">${fmtDate(r.playedAt)}</td>
+        <td>${stHtml}</td><td><div class="row" style="flex-wrap:nowrap">${act}</div></td></tr>`; }).join('')}
+    </table></div>` : '<div class="muted">該当する記録はありません。</div>'}
+  </div>`;
+  $('#dFlag').onchange = e => { st.dataFlag = e.target.value; render(); };
+  $('#dPlayer').onchange = e => { st.dataPlayer = e.target.value; render(); };
+  $('#dQ').onchange = e => { st.dataQ = e.target.value; render(); };
+  bindRecActions();
+  document.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => {
+    try { const res = await api('adminRestoreRecord', { adminKey, recordId: b.dataset.restore });
+      const i = D.records.findIndex(x => x.id === res.record.id); if (i >= 0) D.records[i] = res.record; toast('復元しました'); render(); }
+    catch (e) { toast(e.message, 3000); }
+  });
+  document.querySelectorAll('[data-purge]').forEach(b => b.onclick = async () => {
+    if (!confirm('この記録を完全に削除します。写真も削除され、元に戻せません（確定済みの大会結果のコピーは残ります）。よろしいですか？')) return;
+    try { await api('adminPurgeRecord', { adminKey, recordId: b.dataset.purge });
+      D.records = D.records.filter(x => x.id !== b.dataset.purge); toast('完全に削除しました'); render(); }
+    catch (e) { toast(e.message, 3000); }
+  });
+}
+
+/* ===================== 管理 ===================== */
+function viewManage() {
+  const bk = st.backups;
+  $('#tabBody').innerHTML = `
+  <div class="card"><h2>サーバー</h2>
+    <div class="kv"><span>サーバーのバージョン</span><span>${esc(D.version || '2.0以前')}${serverOutdated(D.version) ? ' <span class="badge b-ng">更新が必要</span>' : ' <span class="badge b-ok">最新</span>'}</span>
+      <span>必要なバージョン</span><span>${REQUIRED_SERVER}</span>
+      <span>記録</span><span>${D.records.length}件（うち削除済み ${D.records.filter(r => r.deleted).length}件）</span>
+      <span>確定済みの大会結果</span><span>${D.results.length}件</span></div>
+  </div>
+  <div class="card"><h2>バックアップ</h2>
+    <div class="muted">スプレッドシート全体（記録・楽曲・大会・確定結果）をドライブの「太鼓スコア記録_バックアップ」フォルダに複製します。写真は容量が大きいため含みません（写真フォルダがそのまま残ります）。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn small" id="bkNow">今すぐバックアップ</button>
+      <button class="btn sub small" id="bkJson">全データをJSONでダウンロード</button>
+      <a class="btn sub small" href="${esc(D.photoFolderUrl)}" target="_blank" rel="noopener" style="text-decoration:none">写真フォルダを開く</a>
+    </div>
+    <h3>自動バックアップ</h3>
+    ${bk ? `<label class="chk"><input type="checkbox" id="bkAuto"${bk.auto ? ' checked' : ''}> 毎週月曜 4時に自動でバックアップする（直近8回分を保存）</label>
+      <h3>保存済み（${bk.backups.length}件）</h3>
+      ${bk.backups.length ? `<div class="list">${bk.backups.slice(0, 20).map(b => `<div class="item"><a href="${esc(b.url)}" target="_blank" rel="noopener">${esc(b.name)}</a>
+        <span class="badge ${b.auto ? 'b-mute' : 'b-ka'}">${b.auto ? '自動' : '手動'}</span></div>`).join('')}</div>` : '<div class="muted">まだありません。</div>'}`
+      : '<div class="muted">読み込み中…</div>'}
+  </div>
+  <div class="card"><h2>この端末</h2>
+    <div class="muted">管理者キーはこの端末に保存されています。共有のPCで使った場合はログアウトしてください。</div>
+    <button class="btn sub small" id="logout" style="margin-top:8px">ログアウト</button></div>`;
+  if (!bk) api('adminBackups', { adminKey }).then(r => { st.backups = r; if (st.tab === 'manage') render(); }).catch(e => toast(e.message, 3000));
+  else $('#bkAuto').onchange = async e => {
+    try { const r = await api('adminSetAutoBackup', { adminKey, on: e.target.checked }); st.backups.auto = r.auto; toast(r.auto ? '自動バックアップを有効にしました' : '自動バックアップを止めました'); render(); }
+    catch (er) { toast(er.message, 3000); }
+  };
+  $('#bkNow').onclick = async () => {
+    $('#bkNow').disabled = true; $('#bkNow').textContent = 'バックアップ中…';
+    try { const r = await api('adminBackupNow', { adminKey }, 120000); toast('バックアップしました：' + r.backup.name, 3000); st.backups = null; render(); }
+    catch (e) { toast(e.message, 3000); render(); }
+  };
+  $('#bkJson').onclick = () => download(`taiko_all_${ymd(new Date())}.json`, JSON.stringify({ app: APP, schema: SCHEMA, kind: 'admin-backup', exportedAt: isoLocal(),
+    players: D.players, songs: D.songs, records: D.records, events: D.events, results: D.results }, null, 2));
+  $('#logout').onclick = () => {
+    if (!confirm('ログアウトしますか？（この端末から管理者キーを消します）')) return;
+    try { localStorage.removeItem(KEY_LS); } catch (e) {}
+    adminKey = ''; D = null; st.backups = null; render();
+  };
 }
 
 /* ===================== 起動 ===================== */
-$('#reload').onclick = () => { if (adminKey) loadAll(); };
+$('#reload').onclick = () => { if (adminKey) { st.backups = null; loadAll(); } };
 if (adminKey && API_URL) loadAll(); else render();
 </script>
 </body>

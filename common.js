@@ -4,7 +4,11 @@
 const APP = 'taiko-score', SCHEMA = 2;
 const API_URL = (window.TAIKO_API_URL || '').trim();
 /** 必要なサーバー（GAS）のバージョン。Code.gs の SERVER_VERSION と合わせる */
-const REQUIRED_SERVER = '2.1';
+const REQUIRED_SERVER = '2.2';
+/** Code.gs と同じ値：大会終了から結果確定までの時間／プレイヤーが削除記録を復元できる日数／日時ずれの警告基準 */
+const CLOSE_HOURS = 18, RESTORE_DAYS = 14, GAP_HOURS = 72;
+const HOUR_MS = 3600000, DAY_MS = 86400000;
+const REJECT_REASONS = ['写真とスコアが一致しない', '写真が不鮮明', '別の譜面のリザルト', 'プレイ日時が期間外'];
 const serverOutdated = v => !v || v.localeCompare(REQUIRED_SERVER, undefined, { numeric: true }) < 0;
 const OUTDATED_MSG = `サーバー（Google Apps Script）が旧バージョンのまま動いています。Apps Scriptで Code.gs を貼り替えて保存したあと、「デプロイ → デプロイを管理 → ✏編集 → バージョン：新バージョン → デプロイ」を行ってください。このままでは、リンク・作曲者・追加日・曲単位大会の設定が保存されません。`;
 const COURSES = { easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい', oni: 'おに', ura: 'おに(裏)' };
@@ -80,6 +84,45 @@ const gcStyle = g => { const c = genreColor(g); return c ? ` style="--gc:${c}"` 
 const genreTag = g => genreColor(g) ? `<span class="gtag"${gcStyle(g)}>${esc(g)}</span>` : `<span class="gtag none">${esc(g || 'ジャンル未設定')}</span>`;
 const genreList = () => `<datalist id="genres">${GENRES.map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
 const songMeta = g => (g.composer ? `<span class="meta">${esc(g.composer)}</span>` : '') + (g.addedDate ? `<span class="meta">${fmtYmd(g.addedDate)} 追加</span>` : '');
+/**
+ * 曲名の表示ブロック
+ *   曲名（大）
+ *   作曲者（小）
+ *   ジャンル（小）　追加日（小）
+ */
+function songHead(g, extra) {
+  return `<div class="shead"><div class="st">${esc(g.title)}</div>
+    ${g.composer ? `<div class="ss">${esc(g.composer)}</div>` : ''}
+    <div class="ss">${genreTag(g.genre)}${g.addedDate ? `<span class="meta">${fmtYmd(g.addedDate)} 追加</span>` : ''}${extra || ''}</div></div>`;
+}
+/** コースの記号（今後、難易度モチーフの画像に差し替える場所。.cicon.cc-○○ に背景画像を指定すれば置き換わる） */
+const cicon = c => `<i class="cicon cc-${c}" aria-hidden="true">${COURSE_DOT[c]}</i>`;
+
+/* ----- 王冠（クリア判定） -----
+   不可が10%未満：クリア（目安・薄い銀）／不可0：フルコンボ（金）／可も0：全良（虹）
+   分母は最大コンボ数（未登録なら良＋可＋不可） */
+const CROWN_RANK = { none: 0, clear: 1, fc: 2, ap: 3 };
+const CROWN_LABEL = { none: '未クリア', clear: 'クリア（目安）', fc: 'フルコンボ', ap: '全良' };
+function crownOf(r, chart) {
+  const total = (chart && chart.maxCombo) || (r.good + r.ok + r.bad);
+  if (!total || r.good + r.ok + r.bad === 0) return 'none';
+  if (r.bad === 0 && r.ok === 0) return 'ap';
+  if (r.bad === 0) return 'fc';
+  return r.bad / total < 0.1 ? 'clear' : 'none';
+}
+/** 王冠の表示。中の文字（◇／◆）は画像を読み込めなかったときだけ表示される */
+const CROWN_TEXT = { none: '◇', clear: '◆', fc: '◆', ap: '◆' };
+const crownHtml = c => `<i class="crown cr-${c}" title="${CROWN_LABEL[c]}" aria-label="${CROWN_LABEL[c]}"><span class="crt">${CROWN_TEXT[c]}</span></i>`;
+
+/* ----- 画像を読み込めないときの代わりの表示 -----
+   難易度：コース色の四角＋「鬼」などの文字／王冠：◇・◆（銀・金・虹）の文字
+   画像ごとに読み込みを確かめ、失敗したものだけ <html> に印（noimg-cc-oni／noimg-cr-fc など）を付けて切り替える */
+(function checkIconImages() {
+  const root = document.documentElement;
+  const test = (src, cls) => { const im = new Image(); im.onerror = () => root.classList.add(cls); im.src = src; };
+  COURSE_ORDER.forEach(c => test(`img/course-${c}.svg`, `noimg-cc-${c}`));
+  ['none', 'clear', 'fc', 'ap'].forEach(k => test(`img/crown-${k}.svg`, `noimg-cr-${k}`));
+})();
 
 /** 曲名でまとめた一覧（曲名順、各曲の譜面はコース順）。曲単位の情報（ジャンル・作曲者・追加日）は最初に見つかった値 */
 function groupSongs(songs) {
@@ -148,7 +191,7 @@ function courseButtons(g, sel, mode, opts) {
       <span>${esc(cshort(s))}</span><small>${esc(lvShort(s))}</small><small>${s.maxCombo ?? '---'}コンボ</small></button>`;
   }).join('') + `</div>`;
 }
-const dots = g => `<span class="dots">${g.charts.map(c => `<i class="cc-${c.course}">${COURSE_DOT[c.course]}</i>`).join('')}</span>`;
+const dots = g => `<span class="dots">${g.charts.map(c => cicon(c.course)).join('')}</span>`;
 /**
  * 詳細ページの「攻略」「▶」「編集」ボタン
  *  攻略あり＋動画あり：両方表示／攻略あり＋動画なし：▶を薄く／攻略なし：攻略・▶とも非表示（場所は確保して位置をそろえる）
@@ -165,7 +208,17 @@ function linkButtons(c, canEdit) {
 
 /* ----- 大会 ----- */
 const eventActive = (e, now) => { now = now || Date.now(); return !e.deleted && ts(e.start) <= now && now <= ts(e.end); };
-const eventState = e => { const now = Date.now(); return e.deleted ? '削除済み' : now < ts(e.start) ? '開催前' : now > ts(e.end) ? '終了' : '開催中'; };
+const eventCloseAt = e => ts(e.end) + CLOSE_HOURS * HOUR_MS;
+/** 開催前 → 開催中 → 受付中（終了後18時間：期間内にプレイした記録の登録・写真追加のみ） → 確定 */
+function eventState(e) {
+  const now = Date.now();
+  if (e.deleted) return '削除済み';
+  if (now < ts(e.start)) return '開催前';
+  if (now <= ts(e.end)) return '開催中';
+  if (now <= eventCloseAt(e) && !e.finalizedAt) return '受付中';
+  return '確定';
+}
+const eventOpen = e => ['開催中', '受付中'].includes(eventState(e));
 /** 終了日までの日数（暦日の差。終了日当日は0） */
 function daysLeft(e) {
   const n = new Date(), d = new Date(e.end);
@@ -173,8 +226,9 @@ function daysLeft(e) {
 }
 function eventBadges(e) {
   const s = eventState(e);
-  let h = `<span class="badge ${s === '開催中' ? 'b-ok' : 'b-mute'}">${s}</span>`;
+  let h = `<span class="badge ${s === '開催中' ? 'b-ok' : s === '受付中' ? 'b-warn' : 'b-mute'}">${s === '受付中' ? 'リザルト受付中' : s}</span>`;
   if (s === '開催中') { const d = daysLeft(e); if (d <= 14) h += `<span class="badge b-warn">あと${d}日</span>`; }
+  if (s === '受付中') h += `<span class="badge b-warn">締切まで${Math.max(1, Math.ceil((eventCloseAt(e) - Date.now()) / HOUR_MS))}時間</span>`;
   return h;
 }
 const isMulti = e => e.multiCourse !== false;
