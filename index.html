@@ -16,7 +16,7 @@
 <main><div id="banners"></div><div id="view"></div></main>
 <nav id="nav">
   <button data-v="input"><span class="ic">🥁</span>入力</button>
-  <button data-v="history"><span class="ic">📊</span>履歴</button>
+  <button data-v="history"><span class="ic">📊</span>記録</button>
   <button data-v="songs"><span class="ic">🎵</span>楽曲</button>
   <button data-v="mydata"><span class="ic">👤</span>マイデータ</button>
 </nav>
@@ -186,7 +186,8 @@ function noticeStatusChanges() {
   showModal(`<h2>🔔 記録の判定が変わりました</h2><div class="list">${changed.map(r => `<div class="item">
     <div class="row between"><strong>${esc(songName(getSong(r.songId)))}</strong><span class="num">${fmtN(r.score)}</span></div>
     <div class="muted">${fmtDate(r.playedAt)}</div>
-    ${r.status === 'rejected' ? `<div><span class="badge b-ng">却下</span> ${esc(r.rejectReason || '')}</div><div class="muted">ランキングの対象外になりました。心当たりがない場合は管理者に連絡してください。</div>`
+    ${r.status === 'rejected' ? `<div><span class="badge b-ng">却下</span> 理由：${esc(r.rejectReason || '（未記入）')}</div>
+      <div class="muted">この成績は<b>あなたの記録としては残り</b>、履歴・自己ベスト・王冠には引き続き反映されます。<b>ランキングには登録されません。</b>心当たりがない場合は管理者に連絡してください。</div>`
       : '<div><span class="badge b-ok">却下取消</span> ランキングの対象に戻りました。</div>'}</div>`).join('')}</div>`);
   changed.forEach(r => { r._seen = r.status; }); save();
 }
@@ -239,7 +240,7 @@ async function runSync(manual) {
 function afterSync() {
   refreshChrome();
   if (state.view === 'input') { renderInputExtras(); if (!state.pick.title) renderPickList(); else renderPicker(); updateInput(); }
-  else render();
+  else if (!(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) render();
 }
 
 /* ===================== 画面共通 ===================== */
@@ -247,6 +248,7 @@ function leaveEdit() { if (state.editId) { state.editId = null; state.pick = sta
 function go(v) {
   if (v !== 'input') leaveEdit();
   if (v !== 'songs' || state.view === 'songs') { state.songForm = null; state.detail = null; } // 楽曲タブを押し直すと一覧に戻る
+  if (v === 'history' && state.view === 'history') state.rec.stack = []; // 記録タブを押し直すとメニューに戻る
   state.view = v; render(); window.scrollTo(0, 0);
 }
 function refreshChrome() {
@@ -327,7 +329,7 @@ function viewInput() {
 function photoStatusText(r) {
   const st = rankState(r);
   return st === 'ok' ? '📷 写真は送信済みです（ランキング対象）' : st === 'waiting' ? '📷 写真は送信待ちです' :
-    st === 'rejected' ? '⚠ この記録は管理者により却下されています' : '写真はまだありません（ランキング対象外）';
+    st === 'rejected' ? '⚠ 管理者により却下されています（自分の記録には残りますが、ランキングには登録されません）' : '写真はまだありません（ランキング対象外）';
 }
 /** 開催中の大会と、登録直後の結果カード */
 function renderInputExtras() {
@@ -491,7 +493,9 @@ function editRec(id) {
 function delRec(id) {
   const r = db.records.find(x => x.id === id); if (!r) return;
   if (!confirm('この記録を削除しますか？')) return;
-  r.deleted = true; r.deletedAt = isoLocal(); r.updatedAt = r.deletedAt; save(); render(); toast(`削除しました（${RESTORE_DAYS}日以内なら履歴から復元できます）`, 2600); scheduleSync();
+  r.deleted = true; r.deletedAt = isoLocal(); r.updatedAt = r.deletedAt; save();
+  const t = recTop(); if (t && t.t === 'play' && t.id === id) state.rec.stack.pop();
+  render(); toast(`削除しました（${RESTORE_DAYS}日以内なら「記録」の一番下から復元できます）`, 2600); scheduleSync();
 }
 const restoreLeft = r => RESTORE_DAYS * DAY_MS - (Date.now() - ts(r.deletedAt || r.updatedAt));
 function restoreRec(id) {
@@ -499,50 +503,116 @@ function restoreRec(id) {
   r.deleted = false; r.deletedAt = null; r.updatedAt = isoLocal(); save(); render(); toast('復元しました'); scheduleSync();
 }
 
-/* ===================== 履歴画面 ===================== */
+/* ===================== 記録画面 =====================
+   メニュー：直近の記録（最初に表示）／楽曲を検索／難易度から検索
+   掘り下げ：譜面別統計 → 個別プレイ結果（rec.stack に積んで「戻る」で戻る）
+   却下された成績も個人記録として扱う（ランキングだけ対象外） */
+const PAGE = 200;
+const CLEARS = { unplayed: '未プレイ', noclear: '未仮クリア', clear: 'クリア済', fc: 'フルコンボ済', ap: '全良済' };
+const SONG_COURSE_OPTS = { all: '全コース', easy: 'かんたん', normal: 'ふつう', hard: 'むずかしい', oni: 'おに(表)', ura: 'おに(裏)', oniura: 'おに(表+裏)' };
+state.rec = {
+  tab: 'recent', stack: [],
+  song: { songQ: '', songGenre: '', songSort: 'title', course: 'all', page: 1 },
+  diff: { q: '', sort: null, dir: 1, page: 1, open: false,
+    clear: new Set(Object.keys(CLEARS)), courses: new Set(COURSE_ORDER), levels: new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) },
+  allPage: 1
+};
+const recTop = () => state.rec.stack[state.rec.stack.length - 1] || null;
+function recPush(v) { state.rec.stack.push(v); if (v.t === 'all') state.rec.allPage = 1; render(); window.scrollTo(0, 0); }
+function recBack() { state.rec.stack.pop(); render(); window.scrollTo(0, 0); }
+/** 他の画面から譜面別統計を開く */
+function openChartStats(id) { state.view = 'history'; state.rec.stack = [{ t: 'chart', id }]; render(); window.scrollTo(0, 0); }
+const pctStr = (n, d) => d ? (n / d * 100).toFixed(2) + '%' : '—';
+const goodRate = r => { const t = r.good + r.ok + r.bad; return t ? r.good / t : null; };
+/** 譜面ごとの自分の成績（削除済みは除く・却下は含む） */
+function chartStats() {
+  const m = new Map();
+  for (const r of activeRecs()) {
+    if (!r.songId) continue;
+    let x = m.get(r.songId);
+    if (!x) { x = { recs: [], best: null, bestRec: null, crown: 'none', last: 0 }; m.set(r.songId, x); }
+    x.recs.push(r);
+    if (r.score != null && (x.best == null || r.score > x.best || (r.score === x.best && ts(r.playedAt) < ts(x.bestRec.playedAt)))) { x.best = r.score; x.bestRec = r; }
+    const c = crownOf(r, getSong(r.songId)); if (CROWN_RANK[c] > CROWN_RANK[x.crown]) x.crown = c;
+    x.last = Math.max(x.last, ts(r.playedAt));
+  }
+  return m;
+}
+/** クリア状況（重ならない5区分） */
+const clearOf = x => !x ? 'unplayed' : x.crown === 'none' ? 'noclear' : x.crown;
+/** そのプレイの時点での自己ベスト（その記録より前のプレイの最高スコア） */
+function bestBefore(r) {
+  let b = null;
+  for (const x of activeRecs()) {
+    if (x.id === r.id || x.songId !== r.songId || x.score == null || !r.songId) continue;
+    const earlier = ts(x.playedAt) < ts(r.playedAt) || (ts(x.playedAt) === ts(r.playedAt) && ts(x.createdAt) < ts(r.createdAt));
+    if (earlier && (b == null || x.score > b)) b = x.score;
+  }
+  return b;
+}
+function diffHtml(r) {
+  if (r.score == null || !r.songId) return '';
+  const b = bestBefore(r);
+  if (b == null) return '<div class="prdiff new">初プレイ</div>';
+  const d = r.score - b;
+  return d > 0 ? `<div class="prdiff up">ベスト更新 +${fmtN(d)}</div>` : d === 0 ? '<div class="prdiff">ベストタイ ±0</div>' : `<div class="prdiff">ベストまで −${fmtN(-d)}</div>`;
+}
+function pager(total, page, key) {
+  const n = Math.max(1, Math.ceil(total / PAGE));
+  if (n <= 1) return '';
+  return `<div class="pager"><button class="btn sub small" data-pg="${key}" data-p="${page - 1}"${page <= 1 ? ' disabled' : ''}>前へ</button>
+    <span class="num">${page} / ${n}</span><button class="btn sub small" data-pg="${key}" data-p="${page + 1}"${page >= n ? ' disabled' : ''}>次へ</button></div>`;
+}
+function bindPager(cb) { document.querySelectorAll('[data-pg]').forEach(b => b.onclick = () => { cb(b.dataset.pg, Number(b.dataset.p)); window.scrollTo(0, 0); }); }
+/** 曲名・作曲者・[記号]コース名・★ の見出し */
+function chartHead(s, sub) {
+  const g = groupMap().get(s.title) || { title: s.title, genre: s.genre, composer: s.composer };
+  return `<div class="card prhead"${gcStyle(g.genre)}><div class="st">${esc(s.title)}</div>
+    ${g.composer ? `<div class="sc">${esc(g.composer)}</div>` : ''}
+    <div class="cl cc-${s.course}">${cicon(s.course).replace('cicon', 'cicon lg')}${esc(cname(s))}<span class="lv">${esc(lvLabel(s))}</span></div>
+    ${sub || ''}</div>`;
+}
+
 function viewHistory() {
-  const recs = activeRecs();
-  const groups = new Map();
-  for (const r of recs) {
-    const k = r.songId || '';
-    let g = groups.get(k);
-    if (!g) { g = { key: k, count: 0, best: null, rankBest: null, last: 0 }; groups.set(k, g); }
-    g.count++;
-    if (r.score != null && (g.best == null || r.score > g.best)) g.best = r.score;
-    if (r.score != null && rankState(r) === 'ok' && (g.rankBest == null || r.score > g.rankBest)) g.rankBest = r.score;
-    g.last = Math.max(g.last, ts(r.playedAt));
-  }
-  const garr = [...groups.values()].sort((a, b) => b.last - a.last);
-  if (state.histSong !== 'all' && !groups.has(state.histSong)) state.histSong = 'all';
-  const f = state.histSong;
-  const list = recs.filter(r => f === 'all' || (r.songId || '') === f).sort((a, b) => ts(b.playedAt) - ts(a.playedAt));
-  let summary = '';
-  if (!recs.length) summary = '<div class="muted">まだ記録がありません。</div>';
-  else if (f === 'all') {
-    summary = `<div class="list">` + garr.map(g => `<div class="item tap" onclick="state.histSong='${esc(g.key)}';render()">
-      <div class="row between"><span>${esc(songName(getSong(g.key)))}</span><span class="num" style="font-weight:800">${fmtN(g.best)}</span></div>
-      <div class="muted">${g.count}回プレイ・最終 ${fmtDate(new Date(g.last))}${g.rankBest != null ? `・📷対象ベスト ${fmtN(g.rankBest)}` : ''}</div></div>`).join('') + `</div>`;
-  } else {
-    const sc = list.filter(r => r.score != null).map(r => r.score);
-    const notes = list.reduce((a, r) => a + r.good + r.ok + r.bad, 0), goods = list.reduce((a, r) => a + r.good, 0);
-    const gb = groups.get(f);
-    summary = `<div class="stats">
-      <div><span class="muted">プレイ回数</span><b>${list.length}</b></div>
-      <div><span class="muted">自己ベスト</span><b>${fmtN(sc.length ? Math.max(...sc) : null)}</b></div>
-      <div><span class="muted">ランキング対象ベスト</span><b>${fmtN(gb ? gb.rankBest : null)}</b></div>
-      <div><span class="muted">平均スコア</span><b>${fmtN(sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : null)}</b></div>
-      <div><span class="muted">平均良率</span><b>${notes ? (goods / notes * 100).toFixed(2) + '%' : '-'}</b></div>
-      <div><span class="muted">最少不可</span><b>${Math.min(...list.map(r => r.bad))}</b></div></div>`;
-  }
-  $('#view').innerHTML = `
-  <div class="card">
-    <h2>${f === 'all' ? '譜面別ベスト' : esc(songName(getSong(f)))}</h2>
-    ${recs.length ? `<select id="hf" style="margin-bottom:10px"><option value="all">すべての譜面</option>${garr.map(g => `<option value="${esc(g.key)}"${f === g.key ? ' selected' : ''}>${esc(songName(getSong(g.key)))}（${g.count}回）</option>`).join('')}</select>` : ''}
-    ${summary}
+  refreshOniBoth(db.songs);
+  const top = recTop();
+  if (top && top.t === 'play') return viewPlay(top.id);
+  if (top && top.t === 'chart') return viewChart(top.id);
+  if (top && top.t === 'all') return viewAllRecs(top.chart);
+  const tabs = [['recent', '🕒 直近の記録'], ['song', '🔎 楽曲を検索'], ['diff', '★ 難易度から検索']];
+  $('#view').innerHTML = `<div class="tabs">${tabs.map(([k, l]) => `<button data-rt="${k}" class="${state.rec.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="recBody"></div>`;
+  document.querySelectorAll('[data-rt]').forEach(b => b.onclick = () => { state.rec.tab = b.dataset.rt; render(); });
+  ({ recent: viewRecent, song: viewSongSearch, diff: viewDiffSearch })[state.rec.tab]();
+}
+
+/* ----- 直近の記録 ----- */
+function recItem(r) {
+  const s = getSong(r.songId), st = rankState(r);
+  const badges = (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
+    (r.mismatch ? '<span class="badge b-warn">自動計算と不一致</span>' : '') +
+    (r.scoreSource === 'none' ? '<span class="badge b-warn">スコアなし</span>' : '') +
+    (st === 'ok' ? '<span class="badge b-ok">📷 ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">📷 送信待ち</span>' :
+     st === 'rejected' ? '<span class="badge b-ng">却下・ランキング対象外</span>' : '<span class="badge b-mute">写真なし</span>') +
+    (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '');
+  return `<div class="item tap" data-play="${esc(r.id)}">
+    <div class="row between" style="flex-wrap:nowrap"><strong style="min-width:0">${s ? cicon(s.course) + ' ' : ''}${esc(songName(s))}</strong>
+      <span class="num" style="font-weight:800;white-space:nowrap">${crownHtml(crownOf(r, s))} ${fmtN(r.score)}</span></div>
+    <div class="muted num">${fmtDate(r.playedAt)}　<span class="j-good">良${r.good}</span> <span class="j-ok">可${r.ok}</span> <span class="j-bad">不可${r.bad}</span> <span class="j-roll">連打${r.roll}</span></div>
+    <div class="row between" style="margin-top:4px;flex-wrap:nowrap"><div>${badges}</div><button class="btn sub small" data-play="${esc(r.id)}">詳細</button></div></div>`;
+}
+function bindPlayLinks() {
+  document.querySelectorAll('[data-play]').forEach(el => el.onclick = e => { e.stopPropagation(); recPush({ t: 'play', id: el.dataset.play }); });
+}
+function viewRecent() {
+  const list = activeRecs().sort((a, b) => ts(b.playedAt) - ts(a.playedAt) || ts(b.createdAt) - ts(a.createdAt));
+  $('#recBody').innerHTML = `
+  <div class="card"><h2>直近の記録</h2>
+    ${list.length ? `<div class="list">${list.slice(0, 10).map(recItem).join('')}</div>` : '<div class="muted">まだ記録がありません。</div>'}
+    ${list.length > 10 ? `<button class="btn sub" id="allBtn">すべての記録を見る（${list.length}件）</button>` : ''}
   </div>
-  ${list.length ? `<div class="card"><h2>プレイ記録（${list.length}件）</h2><div class="list">${list.map(r => recItem(r, groups.get(r.songId || '')?.best)).join('')}</div></div>` : ''}
   ${deletedCard()}`;
-  const hf = $('#hf'); if (hf) hf.onchange = () => { state.histSong = hf.value; render(); };
+  bindPlayLinks();
+  if ($('#allBtn')) $('#allBtn').onclick = () => recPush({ t: 'all', chart: null });
 }
 /** 削除から14日以内の記録（復元できる） */
 function deletedCard() {
@@ -554,23 +624,217 @@ function deletedCard() {
       <div class="muted">${fmtDate(r.playedAt)} プレイ・あと${Math.ceil(restoreLeft(r) / DAY_MS)}日で復元できなくなります</div>
       <button class="btn sub small" style="margin-top:6px" onclick="restoreRec('${r.id}')">復元する</button></div>`).join('')}</div></details>`;
 }
-function recItem(r, best) {
+/** すべての記録（譜面を指定した場合はその譜面だけ） */
+function viewAllRecs(chartId) {
+  const s = chartId ? getSong(chartId) : null;
+  const list = activeRecs().filter(r => !chartId || r.songId === chartId).sort((a, b) => ts(b.playedAt) - ts(a.playedAt) || ts(b.createdAt) - ts(a.createdAt));
+  const page = Math.min(state.rec.allPage, Math.max(1, Math.ceil(list.length / PAGE)));
+  $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
+  ${s ? chartHead(s) : ''}
+  <div class="card"><h2>すべての記録（${list.length}件）</h2>
+    ${list.length ? `<div class="list">${list.slice((page - 1) * PAGE, page * PAGE).map(recItem).join('')}</div>` : '<div class="muted">記録がありません。</div>'}
+    ${pager(list.length, page, 'all')}</div>`;
+  $('#back').onclick = recBack;
+  bindPlayLinks();
+  bindPager((k, p) => { state.rec.allPage = p; render(); });
+}
+
+/* ----- 楽曲を検索 ----- */
+function viewSongSearch() {
+  const o = state.rec.song;
+  $('#recBody').innerHTML = `
+  <div class="card">${sortBar(o)}
+    <label>表示するコース</label>
+    <select id="rsCourse">${Object.entries(SONG_COURSE_OPTS).map(([k, v]) => `<option value="${k}"${o.course === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+  </div>
+  <div id="rsList"></div>`;
+  bindSortBar(o, () => { o.page = 1; renderSongSearch(); });
+  $('#rsCourse').onchange = e => { o.course = e.target.value; o.page = 1; renderSongSearch(); };
+  renderSongSearch();
+}
+function renderSongSearch() {
+  const o = state.rec.song, stats = chartStats();
+  const want = o.course === 'all' ? null : o.course === 'oniura' ? ['oni', 'ura'] : [o.course];
+  const gs = filterSortGroups(groupMap(), o.songQ, o.songGenre, o.songSort)
+    .map(g => ({ g, charts: g.charts.filter(c => !want || want.includes(c.course)) }))
+    .filter(x => x.charts.length); // 該当コースが1つもない曲は省略
+  const page = Math.min(o.page, Math.max(1, Math.ceil(gs.length / PAGE)));
+  $('#rsList').innerHTML = `<div class="card"><h2>${gs.length}曲</h2>
+    ${gs.length ? `<div class="list">${gs.slice((page - 1) * PAGE, page * PAGE).map(({ g, charts }) => `<div class="item"${gcStyle(g.genre)}>
+      <div class="shead"><div class="st">${esc(g.title)}</div>${g.composer ? `<div class="sc">${esc(g.composer)}</div>` : ''}
+        <div class="ss">${genreTag(g.genre)}${g.addedDate ? `<span class="meta">${fmtYmd(g.addedDate)} 追加</span>` : ''}</div></div>
+      <div class="srows">${charts.map(c => { const x = stats.get(c.id);
+        return `<button type="button" class="srow cc-${c.course}" data-chart="${esc(c.id)}">${cicon(c.course)}
+          ${crownHtml(x ? x.crown : 'none')}<span class="sb">${x && x.best != null ? fmtN(x.best) : '<span class="none">記録なし</span>'}</span>
+          <span class="sn">${x ? `${x.recs.length}回` : ''}</span></button>`; }).join('')}</div></div>`).join('')}</div>`
+      : '<div class="muted">該当する楽曲がありません。</div>'}
+    ${pager(gs.length, page, 'song')}</div>`;
+  document.querySelectorAll('[data-chart]').forEach(b => b.onclick = () => recPush({ t: 'chart', id: b.dataset.chart }));
+  bindPager((k, p) => { state.rec.song.page = p; renderSongSearch(); });
+}
+
+/* ----- 難易度から検索（1譜面1行の表） ----- */
+const DIFF_COLS = [['title', '楽曲名'], ['course', 'コース'], ['level', '★'], ['crown', '王冠'], ['score', 'スコア']];
+function viewDiffSearch() {
+  const o = state.rec.diff;
+  const box = (name, set, entries) => `<div class="chks">${entries.map(([v, l]) => `<label><input type="checkbox" data-f="${name}" value="${v}"${set.has(name === 'levels' ? Number(v) : v) ? ' checked' : ''}> ${l}</label>`).join('')}
+    <button type="button" class="btn sub small" data-all="${name}">すべて</button><button type="button" class="btn sub small" data-none="${name}">解除</button></div>`;
+  $('#recBody').innerHTML = `
+  <div class="card">
+    <input id="dq" type="search" placeholder="曲名・作曲者で検索" value="${esc(o.q)}" autocomplete="off">
+    <details id="dFilt"${o.open ? ' open' : ''} style="margin-top:8px"><summary style="cursor:pointer;font-weight:700">絞り込み</summary>
+      <label>クリア状況</label>${box('clear', o.clear, Object.entries(CLEARS))}
+      <label>コース</label>${box('courses', o.courses, COURSE_ORDER.map(c => [c, COURSES[c].replace('おに(裏)', 'おに(裏譜面)')]))}
+      <label>難易度</label>${box('levels', o.levels, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => [String(n), '★' + n]))}
+    </details>
+  </div>
+  <div id="dList"></div>`;
+  $('#dFilt').ontoggle = e => { o.open = e.target.open; };
+  $('#dq').oninput = e => { o.q = e.target.value; o.page = 1; renderDiffList(); };
+  const setOf = n => n === 'clear' ? o.clear : n === 'courses' ? o.courses : o.levels;
+  document.querySelectorAll('[data-f]').forEach(cb => cb.onchange = () => {
+    const set = setOf(cb.dataset.f), v = cb.dataset.f === 'levels' ? Number(cb.value) : cb.value;
+    if (cb.checked) set.add(v); else set.delete(v); o.page = 1; renderDiffList();
+  });
+  document.querySelectorAll('[data-all],[data-none]').forEach(b => b.onclick = () => {
+    const n = b.dataset.all || b.dataset.none, set = setOf(n), on = !!b.dataset.all;
+    document.querySelectorAll(`[data-f="${n}"]`).forEach(cb => { cb.checked = on; const v = n === 'levels' ? Number(cb.value) : cb.value; if (on) set.add(v); else set.delete(v); });
+    o.page = 1; renderDiffList();
+  });
+  renderDiffList();
+}
+function renderDiffList() {
+  const o = state.rec.diff, stats = chartStats(), t = o.q.trim().toLowerCase(), gm = groupMap();
+  let rows = activeSongs().map(s => ({ s, x: stats.get(s.id) || null }))
+    .filter(({ s, x }) => o.courses.has(s.course) && o.levels.has(s.level) && o.clear.has(clearOf(x)))
+    .filter(({ s }) => !t || (s.title + ' ' + ((gm.get(s.title) || {}).composer || '')).toLowerCase().includes(t));
+  // 並べ替え：同じ列を押すたびに 昇順 → 降順 → 解除
+  const tierRank = s => s.subLevel ? TIERS.length - TIERS.indexOf(s.subLevel.tier) : 0; // SS が最も高い
+  const key = {
+    title: r => r.s.title, course: r => courseIdx(r.s.course), level: r => r.s.level * 100 + tierRank(r.s),
+    crown: r => r.x ? CROWN_RANK[r.x.crown] : -1, score: r => r.x && r.x.best != null ? r.x.best : -1
+  }[o.sort];
+  const base = (a, b) => a.s.title.localeCompare(b.s.title, 'ja') || courseIdx(a.s.course) - courseIdx(b.s.course);
+  rows.sort(key ? (a, b) => { const ka = key(a), kb = key(b); const c = typeof ka === 'string' ? ka.localeCompare(kb, 'ja') : ka - kb; return c * o.dir || base(a, b); } : base);
+  const page = Math.min(o.page, Math.max(1, Math.ceil(rows.length / PAGE)));
+  const mark = k => o.sort === k ? (o.dir > 0 ? ' ▲' : ' ▼') : '';
+  $('#dList').innerHTML = `<div class="card"><h2>${rows.length}譜面</h2>
+    <div class="dtbl">
+      <div class="drow dhead">${DIFF_COLS.map(([k, l]) => `<button type="button" data-sort="${k}" class="dh-${k}${o.sort === k ? ' on' : ''}">${l}${mark(k)}</button>`).join('')}</div>
+      ${rows.slice((page - 1) * PAGE, page * PAGE).map(({ s, x }) => `<button type="button" class="drow" data-chart="${esc(s.id)}"${gcStyle((gm.get(s.title) || {}).genre || s.genre)}>
+        <span class="dt">${esc(s.title)}</span>
+        <span class="dc cc-${s.course}">${cicon(s.course)}</span>
+        <span class="dl"><b>★${s.level}</b>${s.subLevel ? `<small>${esc(subShort(s))}</small>` : ''}</span>
+        <span class="dk">${crownHtml(x ? x.crown : 'none')}</span>
+        <span class="ds num">${x && x.best != null ? fmtN(x.best) : '—'}</span>
+        <span class="dg">›</span></button>`).join('')}
+    </div>
+    ${rows.length ? '' : '<div class="muted" style="margin-top:8px">該当する譜面がありません。</div>'}
+    ${pager(rows.length, page, 'diff')}</div>`;
+  document.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => {
+    const k = b.dataset.sort;
+    if (o.sort !== k) { o.sort = k; o.dir = 1; } else if (o.dir === 1) o.dir = -1; else { o.sort = null; o.dir = 1; }
+    o.page = 1; renderDiffList();
+  });
+  document.querySelectorAll('.drow[data-chart]').forEach(b => b.onclick = () => recPush({ t: 'chart', id: b.dataset.chart }));
+  bindPager((k, p) => { state.rec.diff.page = p; renderDiffList(); });
+}
+
+/* ----- 譜面別統計 ----- */
+function viewChart(id) {
+  const s = getSong(id);
+  if (!s) { recBack(); return; }
+  const x = chartStats().get(id);
+  const recs = x ? [...x.recs].sort((a, b) => ts(b.playedAt) - ts(a.playedAt)) : [];
+  const last10 = recs.slice(0, 10).map(goodRate).filter(v => v != null);
+  const rates = recs.map(goodRate).filter(v => v != null);
+  const b = x && x.bestRec;
+  const panel = (label, val) => `<div><span class="muted">${label}</span><b>${val}</b></div>`;
+  $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
+  ${chartHead(s, `<div class="muted" style="margin-top:6px">最終プレイ：${x ? fmtDate(new Date(x.last)) : '—'}<br>自己ベスト：${b ? fmtDate(b.playedAt) : '—'}</div>`)}
+  <div class="card prscore">${crownHtml(x ? x.crown : 'none').replace('crown ', 'crown xl ')}
+    <div><div class="muted">自己ベスト</div><div class="prnum">${b ? fmtN(b.score) : '—'}</div></div></div>
+  ${x ? `<div class="stats st3">
+    ${panel('プレイ回数', `${recs.length}回`)}
+    ${panel('直近10回の平均良率', last10.length ? (last10.reduce((a, v) => a + v, 0) / last10.length * 100).toFixed(2) + '%' : '—')}
+    ${panel('最高良率', rates.length ? (Math.max(...rates) * 100).toFixed(2) + '%' : '—')}
+    ${panel('最高連打', `${Math.max(...recs.map(r => r.roll))}打`)}
+    ${panel('自己ベスト時の可', b ? `<span class="j-ok">${b.ok}</span>` : '—')}
+    ${panel('自己ベスト時の不可', b ? `<span class="j-bad">${b.bad}</span>` : '—')}</div>
+    <button class="btn sub" id="allBtn">すべての記録を見る（${recs.length}件）</button>
+    ${b ? `<h3>自己ベスト</h3>${playBody(b, true)}` : ''}`
+    : `<div class="card muted">まだこの譜面の記録はありません。<button class="btn" id="playThis">この譜面を記録する</button></div>`}`;
+  $('#back').onclick = recBack;
+  if ($('#allBtn')) $('#allBtn').onclick = () => recPush({ t: 'all', chart: id });
+  if ($('#playThis')) $('#playThis').onclick = () => { state.pick = { title: s.title, songId: s.id }; go('input'); };
+  bindPlayBody();
+}
+
+/* ----- 個別プレイ結果 ----- */
+function viewPlay(id) {
+  const r = db.records.find(x => x.id === id);
+  if (!r || r.deleted) { recBack(); return; }
+  const s = getSong(r.songId);
+  $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
+    ${s ? chartHead(s, `<button class="btn sub small" id="toChart" style="margin-top:8px">この譜面の統計 ›</button>`) : '<div class="card prhead"><div class="st">楽曲未選択</div></div>'}
+    ${playBody(r, false)}
+    <div class="row" style="justify-content:flex-end;margin-top:4px">
+      <button class="btn sub small" id="pEdit">編集</button><button class="btn sub small danger" id="pDel">削除</button></div>`;
+  $('#back').onclick = recBack;
+  if ($('#toChart')) $('#toChart').onclick = () => recPush({ t: 'chart', id: s.id });
+  $('#pEdit').onclick = () => editRec(r.id);
+  $('#pDel').onclick = () => delRec(r.id);
+  bindPlayBody();
+}
+/** 王冠＋スコア＋差分／日時・写真／判定パネル（譜面別統計の自己ベスト表示でも使う） */
+function playBody(r, embedded) {
   const s = getSong(r.songId), st = rankState(r);
-  const badges = (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
-    (r.mismatch ? '<span class="badge b-warn">自動計算と不一致</span>' : '') +
-    (r.scoreSource === 'none' ? '<span class="badge b-warn">スコアなし</span>' : '') +
-    (s && best != null && r.score === best ? '<span class="badge b-best">自己ベスト</span>' : '') +
-    (st === 'ok' ? '<span class="badge b-ok">📷 ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">📷 送信待ち</span>' :
-     st === 'rejected' ? '<span class="badge b-ng">却下</span>' : '<span class="badge b-mute">写真なし</span>') +
-    (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '');
-  return `<div class="item">
-    <div class="row between"><strong>${esc(songName(s))}${s && s.deleted ? '<span class="badge b-warn">削除済み譜面</span>' : ''}</strong><span class="num" style="font-weight:800">${crownHtml(crownOf(r, s))} ${fmtN(r.score)}</span></div>
-    ${st === 'rejected' ? `<div class="muted" style="color:var(--danger)">却下理由：${esc(r.rejectReason || '（未記入）')}</div>` : ''}
-    <div class="muted num">${fmtDate(r.playedAt)}　<span class="j-good">良${r.good}</span> <span class="j-ok">可${r.ok}</span> <span class="j-bad">不可${r.bad}</span> <span class="j-roll">連打${r.roll}</span></div>
-    <div style="margin-top:2px">${badges}</div>
-    <div class="row" style="margin-top:6px">
-      <button class="btn sub small" onclick="editRec('${r.id}')">${st === 'none' ? '📷 写真を追加・編集' : '編集'}</button>
-      <button class="btn sub small danger" onclick="delRec('${r.id}')">削除</button></div></div>`;
+  const total = r.good + r.ok + r.bad;
+  const badges = (st === 'ok' ? '<span class="badge b-ok">ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">写真送信待ち</span>' :
+    st === 'rejected' ? '<span class="badge b-ng">却下・ランキング対象外</span>' : '<span class="badge b-mute">写真なし（ランキング対象外）</span>') +
+    (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') + (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '');
+  const photo = r.photoId || r.localPhoto
+    ? `<button type="button" class="btn sub prphoto" data-photo="${esc(r.id)}">📷 写真を表示${r.localPhoto && !r.photoId ? '（送信待ち）' : ''}</button>`
+    : `<label class="prphoto add">＋ 写真を追加<input type="file" accept="image/*" data-addphoto="${esc(r.id)}"></label>`;
+  const jr = (cls, label, n, p) => `<div class="jr"><span class="jl ${cls}">${label}</span><span class="jn num">${n}</span><span class="jp num${p === '---' ? ' na' : ''}">${p}</span></div>`;
+  return `<div class="prmid">
+    <div class="card prscore">${crownHtml(crownOf(r, s)).replace('crown ', 'crown xl ')}
+      <div><div class="prnum">${fmtN(r.score)}</div>${diffHtml(r)}</div></div>
+    <div class="prside">
+      <div class="prdate">${fmtDate(r.playedAt)}<div>${badges}</div>
+        ${st === 'rejected' ? `<div class="muted" style="color:var(--danger)">却下理由：${esc(r.rejectReason || '（未記入）')}</div>` : ''}</div>
+      ${photo}
+    </div></div>
+  <div class="card prjudge">
+    ${jr('j-good', '良', r.good, pctStr(r.good, total))}${jr('j-ok', '可', r.ok, pctStr(r.ok, total))}${jr('j-bad', '不可', r.bad, pctStr(r.bad, total))}${jr('j-roll', '連打数', r.roll, '---')}
+  </div>
+  ${embedded ? `<button class="btn sub small" data-play="${esc(r.id)}">このプレイの詳細 ›</button>` : ''}`;
+}
+const myPhotoCache = new Map();
+function bindPlayBody() {
+  bindPlayLinks();
+  document.querySelectorAll('[data-photo]').forEach(b => b.onclick = async () => {
+    const r = db.records.find(x => x.id === b.dataset.photo); if (!r) return;
+    const m = showModal(`<h2>リザルト写真</h2><div id="ph" class="muted">読み込んでいます…</div>`, true);
+    try {
+      let src = myPhotoCache.get(r.id);
+      if (!src && r.localPhoto) { const b64 = await photoStore.get(r.id); if (b64) src = 'data:image/jpeg;base64,' + b64; }
+      if (!src) {
+        const res = await api('getMyPhoto', { playerId: db.player.id, token: db.player.token, recordId: r.id }, 60000);
+        src = `data:${res.mime};base64,${res.data}`;
+      }
+      myPhotoCache.set(r.id, src);
+      m.querySelector('#ph').innerHTML = `<img src="${src}" alt="リザルト写真" style="width:100%;border-radius:8px">`;
+    } catch (e) { m.querySelector('#ph').textContent = '写真を読み込めませんでした：' + e.message; }
+  });
+  document.querySelectorAll('[data-addphoto]').forEach(inp => inp.onchange = async e => {
+    const f = e.target.files[0], r = db.records.find(x => x.id === inp.dataset.addphoto); if (!f || !r) return;
+    try {
+      const p = await compressImage(f);
+      await photoStore.set(r.id, p.b64); r.localPhoto = true; myPhotoCache.set(r.id, 'data:image/jpeg;base64,' + p.b64);
+      save(); toast('写真を追加しました（送信するとランキング対象になります）', 2600); render(); scheduleSync(200);
+    } catch (er) { alert(er.message); }
+  });
 }
 
 /* ===================== 楽曲画面 =====================
@@ -613,10 +877,10 @@ function renderSongList() {
 function viewSongDetail() {
   const g = groupMap().get(state.detail);
   if (!g) { state.detail = null; return viewSongs(); }
-  // 自分の記録：譜面ごとのベストスコアと、取った中で最高の王冠（却下は除く）
+  // 自分の記録：譜面ごとのベストスコアと、取った中で最高の王冠（却下された成績も個人記録としては含める）
   const my = new Map();
   for (const r of activeRecs()) {
-    if (!r.songId || r.status === 'rejected') continue;
+    if (!r.songId) continue;
     const m = my.get(r.songId) || { n: 0, best: null, crown: 'none' };
     m.n++; if (r.score != null && (m.best == null || r.score > m.best)) m.best = r.score;
     const c = crownOf(r, getSong(r.songId)); if (CROWN_RANK[c] > CROWN_RANK[m.crown]) m.crown = c;
@@ -637,12 +901,13 @@ function viewSongDetail() {
       <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><div style="min-width:0">
         <div class="cl">${cicon(c.course).replace('cicon', 'cicon lg')}${esc(cname(c))}${evIds.has(c.id) ? '<span title="開催中の大会の対象">🏆</span>' : ''}</div>
         <div class="cs">${esc(lvLabel(c))}　/　${c.maxCombo ?? '---'}コンボ</div>
-        <div class="cb">${crownHtml(m ? m.crown : 'none')}${m && m.best != null ? fmtN(m.best) : '<span class="none">記録なし</span>'}</div></div>
+        <button type="button" class="cb tap" data-stats="${esc(c.id)}" title="自分の記録を見る">${crownHtml(m ? m.crown : 'none')}${m && m.best != null ? fmtN(m.best) : '<span class="none">記録なし</span>'}<span class="muted" style="font-size:12px">›</span></button></div>
         ${linkButtons(c, canEditSong(c))}</div></div>`;
   }).join('')}</div>
   <div class="muted" style="margin-top:8px">王冠：${crownHtml('clear')}クリア（目安：不可10%未満）　${crownHtml('fc')}フルコンボ　${crownHtml('ap')}全良</div>
   <div class="muted" style="margin-top:8px">難易度の追加は、楽曲リストの「＋」から行えます。</div></div>`;
   $('#back').onclick = () => { state.detail = null; render(); };
+  document.querySelectorAll('[data-stats]').forEach(b => b.onclick = () => openChartStats(b.dataset.stats));
   $('#gEdit').onclick = () => canGroup ? openSongForm({ mode: 'editGroup', title: g.title }) : toast(EDIT_DENIED, 2500);
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
     const s = getSong(b.dataset.edit);
@@ -832,7 +1097,7 @@ function viewMyData() {
     <label>バックアップ・旧バージョンのデータを読み込む</label>
     <input type="file" id="imFile" accept=".json,application/json,text/plain">
   </div>
-  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.2・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
+  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.3・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
 
   if (registered()) {
     $('#nameSave').onclick = saveName;
