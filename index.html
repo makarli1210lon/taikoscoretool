@@ -741,31 +741,69 @@ function renderDiffList() {
 }
 
 /* ----- 譜面別統計 ----- */
+/* 直近の良率の傾向（↑→↓）のしきい値（良率の差、％ポイント）。実際に使ってみて調整する */
+const TREND_UP = 0.15, TREND_DOWN = -0.30;
+const avg = a => a.length ? a.reduce((x, v) => x + v, 0) / a.length : null;
+const fmtDateOnly = d => { d = new Date(d); return `${d.getFullYear()}/${p2(d.getMonth() + 1)}/${p2(d.getDate())}`; };
+/**
+ * 直近10回の平均良率と、過去との比較
+ *  基準＝11回目以前（直近10回を除く）の平均。25回以上なら 0.8×(11回目以前の平均)＋0.2×(11〜25回目の平均)
+ *  10回以下は比べる相手がいないので矢印なし
+ */
+function rateTrend(recsDesc) {
+  const rates = recsDesc.map(goodRate);
+  const recent = rates.slice(0, 10).filter(v => v != null), older = rates.slice(10).filter(v => v != null);
+  const rAvg = avg(recent);
+  if (rAvg == null || !older.length) return { rAvg, arrow: '' };
+  const base = recsDesc.length >= 25 ? 0.8 * avg(older) + 0.2 * avg(rates.slice(10, 25).filter(v => v != null)) : avg(older);
+  const d = (rAvg - base) * 100;
+  const arrow = d >= TREND_UP ? '<span class="trend up" title="調子が上がっています">↑</span>'
+    : d >= TREND_DOWN ? '<span class="trend flat" title="安定しています">→</span>' : '<span class="trend down" title="少し下がっています">↓</span>';
+  return { rAvg, arrow, d };
+}
 function viewChart(id) {
   const s = getSong(id);
   if (!s) { recBack(); return; }
   const x = chartStats().get(id);
-  const recs = x ? [...x.recs].sort((a, b) => ts(b.playedAt) - ts(a.playedAt)) : [];
-  const last10 = recs.slice(0, 10).map(goodRate).filter(v => v != null);
-  const rates = recs.map(goodRate).filter(v => v != null);
+  const recs = x ? [...x.recs].sort((a, b) => ts(b.playedAt) - ts(a.playedAt) || ts(b.createdAt) - ts(a.createdAt)) : [];
   const b = x && x.bestRec;
   const panel = (label, val) => `<div><span class="muted">${label}</span><b>${val}</b></div>`;
+  let body = '';
+  if (x) {
+    const n = recs.length, tr = rateTrend(recs);
+    const crowns = recs.map(r => crownOf(r, s));
+    const apN = crowns.filter(c => c === 'ap').length;
+    const fcN = crowns.filter(c => c === 'fc' || c === 'ap').length; // フルコンボの回数には全良も含める
+    // 自己ベスト更新回数：古い順に見て、それまでの最高を上回った回（初プレイは数えない）
+    let best = null, upd = 0;
+    [...recs].reverse().forEach(r => { if (r.score == null) return; if (best != null && r.score > best) upd++; if (best == null || r.score > best) best = r.score; });
+    // 日付：初プレイ日と、最も多くプレイした日（同数なら新しい日）
+    const byDay = new Map();
+    recs.forEach(r => { const k = fmtDateOnly(r.playedAt); byDay.set(k, (byDay.get(k) || 0) + 1); });
+    const topDay = [...byDay.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0];
+    body = `<div class="stats st3">
+      ${panel('プレイ回数', `${n}回`)}
+      ${panel(n < 10 ? `直近${n}回の平均良率` : '直近10回の平均良率', tr.rAvg != null ? `${(tr.rAvg * 100).toFixed(2)}%${tr.arrow}` : '—')}
+      ${apN ? panel(`${crownHtml('ap')} 全良の回数`, `${apN}回`) : panel('最少可', `<span class="j-ok">${Math.min(...recs.map(r => r.ok))}</span>`)}
+      ${fcN ? panel(`${crownHtml('fc')} フルコンボの回数`, `${fcN}回`) : panel('最少不可', `<span class="j-bad">${Math.min(...recs.map(r => r.bad))}</span>`)}
+      ${panel('最高連打数', `${Math.max(...recs.map(r => r.roll))}打`)}
+      ${panel('自己ベスト更新回数', `${upd}回`)}</div>
+    <div class="card dayinfo">
+      <div class="kv2"><span>初めてプレイした日</span><b class="num">${fmtDateOnly(recs[n - 1].playedAt)}</b></div>
+      <div class="kv2"><span>最も多くプレイした日</span><b class="num">${topDay[0]}（${topDay[1]}回）</b></div>
+      <button class="btn sub small faded" id="calBtn" title="準備中">📅 カレンダー・グラフ表示（準備中）</button>
+    </div>
+    <button class="btn sub" id="allBtn">すべての記録を見る（${n}件）</button>
+    ${b ? `<h3>自己ベスト</h3>${playBody(b, true)}` : ''}`;
+  }
   $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
   ${chartHead(s, `<div class="muted" style="margin-top:6px">最終プレイ：${x ? fmtDate(new Date(x.last)) : '—'}<br>自己ベスト：${b ? fmtDate(b.playedAt) : '—'}</div>`)}
   <div class="card prscore">${crownHtml(x ? x.crown : 'none').replace('crown ', 'crown xl ')}
     <div><div class="muted">自己ベスト</div><div class="prnum">${b ? fmtN(b.score) : '—'}</div></div></div>
-  ${x ? `<div class="stats st3">
-    ${panel('プレイ回数', `${recs.length}回`)}
-    ${panel('直近10回の平均良率', last10.length ? (last10.reduce((a, v) => a + v, 0) / last10.length * 100).toFixed(2) + '%' : '—')}
-    ${panel('最高良率', rates.length ? (Math.max(...rates) * 100).toFixed(2) + '%' : '—')}
-    ${panel('最高連打', `${Math.max(...recs.map(r => r.roll))}打`)}
-    ${panel('自己ベスト時の可', b ? `<span class="j-ok">${b.ok}</span>` : '—')}
-    ${panel('自己ベスト時の不可', b ? `<span class="j-bad">${b.bad}</span>` : '—')}</div>
-    <button class="btn sub" id="allBtn">すべての記録を見る（${recs.length}件）</button>
-    ${b ? `<h3>自己ベスト</h3>${playBody(b, true)}` : ''}`
-    : `<div class="card muted">まだこの譜面の記録はありません。<button class="btn" id="playThis">この譜面を記録する</button></div>`}`;
+  ${x ? body : `<div class="card muted">まだこの譜面の記録はありません。<button class="btn" id="playThis">この譜面を記録する</button></div>`}`;
   $('#back').onclick = recBack;
   if ($('#allBtn')) $('#allBtn').onclick = () => recPush({ t: 'all', chart: id });
+  if ($('#calBtn')) $('#calBtn').onclick = () => toast('カレンダー・グラフ表示は準備中です');
   if ($('#playThis')) $('#playThis').onclick = () => { state.pick = { title: s.title, songId: s.id }; go('input'); };
   bindPlayBody();
 }

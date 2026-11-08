@@ -241,3 +241,11 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
   .prmid{display:grid;grid-template-columns:1.5fr 1fr}
   .prside{grid-template-columns:1fr;align-content:center}
 }
+/* 譜面別統計：傾向の矢印・日付欄 */
+.trend{font-size:15px;font-weight:800;margin-left:6px}
+.trend.up{color:var(--ok)}.trend.flat{color:var(--ka)}.trend.down{color:var(--muted)}
+.stats div .crown{width:22px;height:15px;vertical-align:-2px}
+.dayinfo{margin-top:12px}
+.kv2{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:14px}
+.kv2 span{color:var(--muted)}
+.dayinfo .btn{margin-top:8px}
