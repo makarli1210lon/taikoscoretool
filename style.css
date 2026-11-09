@@ -195,6 +195,14 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
 .dhead button.on{color:var(--accent)}
 .dhead .dh-crown,.dhead .dh-score{text-align:right}
 .dhead .dh-score{grid-column:5}
+/* すべての記録の並び替えボタン */
+.rsort{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 10px}
+.rsort>.muted{font-size:12px;margin-right:2px}
+.chip{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:999px;padding:5px 11px;cursor:pointer;white-space:nowrap}
+.chip.on{border-color:var(--accent);color:var(--accent);font-weight:700;background:var(--soft)}
+/* 入力画面の曲リストの小見出し */
+.phead{font-size:12px;font-weight:700;color:var(--muted);background:var(--soft);padding:5px 10px;border-top:1px solid var(--line)}
+.phead:first-child{border-top:0}
 .dt{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-weight:600;font-size:13px;line-height:1.3;overflow-wrap:anywhere}
 .dc{text-align:center}
 .dl{display:flex;flex-direction:column;line-height:1.15}
