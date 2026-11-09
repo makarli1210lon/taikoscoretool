@@ -451,7 +451,7 @@ function viewEvents() {
   else $('#evNew').onclick = () => {
     const s = new Date(); s.setSeconds(0, 0);
     const e = new Date(s.getTime() + 14 * DAY_MS); e.setHours(23, 59, 0, 0);
-    st.eventForm = { id: '', name: '', start: toLocalInput(s), end: toLocalInput(e), note: '', multi: true, chartIds: new Set(), songs: [] }; render();
+    st.eventForm = { id: '', newId: 'e_' + rand(10), name: '', start: toLocalInput(s), end: toLocalInput(e), note: '', multi: true, chartIds: new Set(), songs: [] }; render();
   };
   document.querySelectorAll('[data-evedit]').forEach(b => b.onclick = () => {
     const e = D.events.find(x => x.id === b.dataset.evedit);
@@ -556,7 +556,7 @@ function bindEventForm(f) {
       return { ids: g.charts.map(c => c.id), base: it.base, hcOn: it.hcOn, hc, roll };
     }).filter(Boolean);
     if (f.multi ? !f.chartIds.size : !songCfg.length) { alert(f.multi ? '課題譜面を1つ以上選んでください。' : '課題楽曲を1曲以上選んでください。'); return; }
-    await saveEvent({ id: f.id, name: f.name.trim(), start: isoLocal(s), end: isoLocal(e), note: f.note.trim(),
+    await saveEvent({ id: f.id || f.newId, name: f.name.trim(), start: isoLocal(s), end: isoLocal(e), note: f.note.trim(),
       multiCourse: f.multi, chartIds: [...f.chartIds], songCfg });
   };
   if ($('#evDel')) $('#evDel').onclick = async () => {
@@ -702,7 +702,7 @@ function bindSongForm(f) {
     const shoko = nn($('#sShoko').value), maxCombo = nn($('#sCombo').value);
     if (shoko != null && shoko % 10 !== 0 && !confirm('初項は通常10点単位です。このまま保存しますか？')) return;
     const now = isoLocal();
-    await saveSongs([{ ...(ed || { id: newSongId(), createdAt: now, deleted: false }), title, genre, ...info, course, level, subLevel, maxCombo, shoko, wikiUrl, videoUrl, updatedAt: now }]);
+    await saveSongs([{ ...(ed || { id: f.newId || (f.newId = newSongId()), createdAt: now, deleted: false }), title, genre, ...info, course, level, subLevel, maxCombo, shoko, wikiUrl, videoUrl, updatedAt: now }]);
   };
   if ($('#sDel')) $('#sDel').onclick = async () => {
     const s = getSong(f.id);
@@ -719,9 +719,13 @@ async function saveSongs(list) {
     const lost = list.some(s => { const r = res.songs.find(x => x.id === s.id);
       return r && ['wikiUrl', 'videoUrl', 'composer', 'addedDate'].some(k => s[k] && !r[k]); });
     st.songForm = null; render();
-    if (lost) alert('一部の項目（リンク・作曲者・追加日）がサーバーに保存されませんでした。\n\n' + OUTDATED_MSG);
+    if (res.skipped && res.skipped.length) alert('次の譜面は、同じ曲名・コースがすでに登録されていたため追加しませんでした。\n\n' + res.skipped.join('\n'));
+    else if (lost) alert('一部の項目（リンク・作曲者・追加日）がサーバーに保存されませんでした。\n\n' + OUTDATED_MSG);
     else toast(`${res.songs.length}譜面を保存しました`);
-  } catch (e) { toast(e.message, 3000); }
+  } catch (e) {
+    if (e.code === 'dup_song') { alert(e.message + '\n\n画面を最新の状態にします。'); st.songForm = null; await loadAll(); return; }
+    toast(e.message, 3000);
+  }
 }
 /** 旧ツールの書き出しファイルなどから楽曲だけを一括登録（同じ曲名・コースは飛ばす） */
 async function importSongs(text) {

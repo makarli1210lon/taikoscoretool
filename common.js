@@ -4,7 +4,7 @@
 const APP = 'taiko-score', SCHEMA = 2;
 const API_URL = (window.TAIKO_API_URL || '').trim();
 /** 必要なサーバー（GAS）のバージョン。Code.gs の SERVER_VERSION と合わせる */
-const REQUIRED_SERVER = '2.4';
+const REQUIRED_SERVER = '2.5';
 /** Code.gs と同じ値：大会終了から結果確定までの時間／プレイヤーが削除記録を復元できる日数／日時ずれの警告基準 */
 const CLOSE_HOURS = 18, RESTORE_DAYS = 14, GAP_HOURS = 72;
 const HOUR_MS = 3600000, DAY_MS = 86400000;
@@ -266,7 +266,24 @@ function eventChartIds(e, songs) {
 
 /* ----- 通信 ----- */
 /** GASウェブアプリへ送る。Content-Typeを付けない（text/plain扱い）ことで事前確認通信を避ける */
+/** 管理者の書き込み操作（保存・却下・削除など）。通信中は画面を覆って、二重に押されるのを防ぐ */
+const isBlockingAction = a => /^admin/.test(a) && !/^admin(GetAll|GetPhoto|Backups)$/.test(a);
+const busy = {
+  n: 0,
+  on() {
+    if (this.n++ > 0 || typeof document === 'undefined') return;
+    let el = document.getElementById('busy');
+    if (!el) { el = document.createElement('div'); el.id = 'busy'; el.innerHTML = '<div>保存中…</div>'; document.body.appendChild(el); }
+    el.classList.add('show');
+  },
+  off() { if (--this.n > 0) return; this.n = 0; const el = document.getElementById('busy'); if (el) el.classList.remove('show'); }
+};
 async function api(action, payload, timeoutMs) {
+  if (!isBlockingAction(action)) return apiCall(action, payload, timeoutMs);
+  busy.on(); // ボタンを押した直後（通信の前）に覆うので、続けて押しても届かない
+  try { return await apiCall(action, payload, timeoutMs); } finally { busy.off(); }
+}
+async function apiCall(action, payload, timeoutMs) {
   if (!API_URL) { const e = new Error('サーバーURLが未設定です（config.js）'); e.code = 'noapi'; throw e; }
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs || 30000) : null;
