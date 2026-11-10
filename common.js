@@ -4,7 +4,7 @@
 const APP = 'taiko-score', SCHEMA = 2;
 const API_URL = (window.TAIKO_API_URL || '').trim();
 /** 必要なサーバー（GAS）のバージョン。Code.gs の SERVER_VERSION と合わせる */
-const REQUIRED_SERVER = '2.5';
+const REQUIRED_SERVER = '2.6';
 /** Code.gs と同じ値：大会終了から結果確定までの時間／プレイヤーが削除記録を復元できる日数／日時ずれの警告基準 */
 const CLOSE_HOURS = 18, RESTORE_DAYS = 14, GAP_HOURS = 72;
 const HOUR_MS = 3600000, DAY_MS = 86400000;

@@ -17,19 +17,22 @@
 <nav id="nav">
   <button data-v="input"><span class="ic">🥁</span>入力</button>
   <button data-v="history"><span class="ic">📊</span>記録</button>
+  <button data-v="dan"><span class="ic">🏯</span>段位</button>
   <button data-v="songs"><span class="ic">🎵</span>楽曲</button>
   <button data-v="mydata"><span class="ic">👤</span>マイデータ</button>
 </nav>
 <div class="toast" id="toast"></div>
 <script src="config.js"></script>
 <script src="common.js"></script>
+<script src="dan.js"></script>
+<script src="dan-view.js"></script>
 <script>
 'use strict';
 /* ===================== データ ===================== */
 const LS_KEY = 'taikoScore.v2';            // v2.3まで使っていた保存場所（localStorage）。起動時にIndexedDBへ移す
 const IDB_NAME = 'taikoScore', OLD_PHOTO_DB = 'taikoScorePhotos';
 let db = { player: { id: '', name: '', deviceId: '', token: '' }, songs: [], records: [], events: [], lastExportAt: null, lastSyncAt: null,
-  cursor: null, fullAt: null, persistAsked: false };
+  cursor: null, fullAt: null, persistAsked: false, dans: [], danRecords: [] };
 let storageOK = true, ready = false;
 /** データが変わるたびに増える番号。集計結果の使い回し（memo）の目印 */
 let dataVer = 0;
@@ -74,10 +77,13 @@ function normRec(r) {
 /* ----- 保存（IndexedDB：記録1件ごとに保存。変わった記録だけ書き込む） -----
    ・使えない環境（一部のプライベートブラウズ等）では従来どおり localStorage に保存する
    ・v2.3までのデータ（localStorage・写真用DB）は初回起動時に自動で移し、件数を確かめてから古い方を消す */
-const META_KEYS = ['player', 'events', 'lastExportAt', 'lastSyncAt', 'cursor', 'fullAt', 'persistAsked'];
+const META_KEYS = ['player', 'events', 'lastExportAt', 'lastSyncAt', 'cursor', 'fullAt', 'persistAsked', 'dans'];
 const recSig = r => [r.updatedAt, r._sv, r._seen, r.localPhoto ? 1 : 0, r.photoId, r.status, r.rejectReason, r.songId, r.deleted ? 1 : 0, r.deletedAt].join('|');
 const songSig = s => JSON.stringify(s);
-const store = { mode: 'ls', idb: null, timer: null, metaSig: '', sig: { songs: new Map(), records: new Map() } };
+const danRecSig = r => JSON.stringify(r);
+const store = { mode: 'ls', idb: null, timer: null, metaSig: '', sig: { songs: new Map(), records: new Map(), danRecords: new Map() } };
+/** IndexedDBに保存する一覧（名前・データ・変更の見分け方） */
+const STORES = () => [['songs', db.songs, songSig], ['records', db.records, recSig], ['danRecords', db.danRecords, danRecSig]];
 
 function idbOpen(name, ver, upgrade) {
   return new Promise((res, rej) => {
@@ -105,6 +111,7 @@ function applyMeta(o) {
   db.events = Array.isArray(o.events) ? o.events : [];
   ['lastExportAt', 'lastSyncAt', 'cursor', 'fullAt'].forEach(k => { db[k] = o[k] || null; });
   db.persistAsked = !!o.persistAsked;
+  db.dans = (Array.isArray(o.dans) ? o.dans : []).map(normDan).filter(Boolean);
 }
 const metaObj = () => { const o = {}; META_KEYS.forEach(k => { o[k] = db[k]; }); return o; };
 function lsRead() {
@@ -118,6 +125,7 @@ function lsLoad() {
       applyMeta(o);
       db.songs = (o.songs || []).map(normSong).filter(Boolean);
       db.records = (o.records || []).map(normRec).filter(Boolean);
+      db.danRecords = (o.danRecords || []).map(normDanRec).filter(Boolean);
     }
   } catch (e) { storageOK = false; }
 }
@@ -127,21 +135,28 @@ function lsSave() { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } ca
 async function initStorage() {
   let d;
   try {
-    d = await idbOpen(IDB_NAME, 1, x => {
-      x.createObjectStore('meta'); x.createObjectStore('songs', { keyPath: 'id' });
-      x.createObjectStore('records', { keyPath: 'id' }); x.createObjectStore('photos');
+    // v2：段位道場の挑戦記録（danRecords）を追加。v1からは足りない置き場所だけを作る
+    d = await idbOpen(IDB_NAME, 2, x => {
+      const has = n => x.objectStoreNames.contains(n);
+      if (!has('meta')) x.createObjectStore('meta');
+      if (!has('songs')) x.createObjectStore('songs', { keyPath: 'id' });
+      if (!has('records')) x.createObjectStore('records', { keyPath: 'id' });
+      if (!has('photos')) x.createObjectStore('photos');
+      if (!has('danRecords')) x.createObjectStore('danRecords', { keyPath: 'id' });
     });
     // 試しに1回読めるか確認（Firefoxのプライベートモード等はここで失敗する）
-    var [meta, songs, recs] = await idbTx(d, ['meta', 'songs', 'records'], 'readonly',
-      t => [t.objectStore('meta').get('main'), t.objectStore('songs').getAll(), t.objectStore('records').getAll()]);
+    var [meta, songs, recs, drecs] = await idbTx(d, ['meta', 'songs', 'records', 'danRecords'], 'readonly',
+      t => [t.objectStore('meta').get('main'), t.objectStore('songs').getAll(), t.objectStore('records').getAll(), t.objectStore('danRecords').getAll()]);
   } catch (e) { store.mode = 'ls'; lsLoad(); return; }
   store.mode = 'idb'; store.idb = d;
   d.onversionchange = () => { d.close(); };
   applyMeta(meta);
   db.songs = (songs || []).map(normSong).filter(Boolean);
   db.records = (recs || []).map(normRec).filter(Boolean);
+  db.danRecords = (drecs || []).map(normDanRec).filter(Boolean);
   db.songs.forEach(s => store.sig.songs.set(s.id, songSig(s)));
   db.records.forEach(r => store.sig.records.set(r.id, recSig(r)));
+  db.danRecords.forEach(r => store.sig.danRecords.set(r.id, danRecSig(r)));
   store.metaSig = JSON.stringify(metaObj());
 
   // v2.3までのデータ（または古い画面がその後に書いたデータ）を取り込む
@@ -186,24 +201,25 @@ async function flush() {
   if (store.timer) { clearTimeout(store.timer); store.timer = null; }
   if (!ready && store.mode === 'ls') return;
   if (store.mode !== 'idb') { lsSave(); return; }
-  const puts = { songs: [], records: [] }, dels = { songs: [], records: [] };
-  [['songs', db.songs, songSig], ['records', db.records, recSig]].forEach(([name, list, sig]) => {
+  const puts = { songs: [], records: [], danRecords: [] }, dels = { songs: [], records: [], danRecords: [] };
+  STORES().forEach(([name, list, sig]) => {
     const prev = store.sig[name], seen = new Set();
     for (const x of list) { const s = sig(x); seen.add(x.id); if (prev.get(x.id) !== s) { puts[name].push(x); prev.set(x.id, s); } }
     for (const id of [...prev.keys()]) if (!seen.has(id)) { dels[name].push(id); prev.delete(id); }
   });
   const meta = metaObj(), ms = JSON.stringify(meta), metaChanged = ms !== store.metaSig;
-  if (!metaChanged && !puts.songs.length && !puts.records.length && !dels.songs.length && !dels.records.length) return;
+  const names = Object.keys(puts);
+  if (!metaChanged && names.every(n => !puts[n].length && !dels[n].length)) return;
   store.metaSig = ms;
   try {
-    await idbTx(store.idb, ['meta', 'songs', 'records'], 'readwrite', t => {
+    await idbTx(store.idb, ['meta', ...names], 'readwrite', t => {
       if (metaChanged) t.objectStore('meta').put(meta, 'main');
-      ['songs', 'records'].forEach(n => { const s = t.objectStore(n); puts[n].forEach(x => s.put(x)); dels[n].forEach(id => s.delete(id)); });
+      names.forEach(n => { const s = t.objectStore(n); puts[n].forEach(x => s.put(x)); dels[n].forEach(id => s.delete(id)); });
     });
     storageOK = true;
   } catch (e) {
     // 失敗した分は次回まとめて書き直す
-    store.sig.songs.clear(); store.sig.records.clear(); store.metaSig = '';
+    Object.values(store.sig).forEach(m => m.clear()); store.metaSig = '';
     storageOK = false; refreshChrome();
   }
 }
@@ -236,7 +252,7 @@ const canEditSong = s => !s.createdBy || s.createdBy === me();
 const pendingRecs = () => db.records.filter(r => r._sv !== r.updatedAt);
 const pendingSongs = () => db.songs.filter(s => canEditSong(s) && s._sv !== s.updatedAt);
 const pendingPhotos = () => db.records.filter(r => r.localPhoto);
-const pendingCount = () => pendingRecs().length + pendingSongs().length + pendingPhotos().length;
+const pendingCount = () => pendingRecs().length + pendingSongs().length + pendingPhotos().length + pendingDanRecs().length + pendingDanPhotos().length;
 function newRecordId() { const st = stamp(new Date()); let id; do { id = `TK-${me()}-${st}-${rand(4)}`; } while (db.records.some(r => r.id === id)); return id; }
 function newSongId() { let id; do { id = 's_' + rand(8).toLowerCase(); } while (db.songs.some(s => s.id === id)); return id; }
 const activeEvents = () => (db.events || []).filter(e => eventActive(e));
@@ -337,15 +353,19 @@ function mergeMine(list) {
 }
 /** 却下・却下取消があった記録を、次に開いたときに知らせる */
 function noticeStatusChanges() {
-  const changed = db.records.filter(r => !r.deleted && (r._seen || 'ok') !== r.status);
-  if (!changed.length || document.querySelector('.modal')) return;
-  showModal(`<h2>🔔 記録の判定が変わりました</h2><div class="list">${changed.map(r => `<div class="item">
+  const changed = db.records.filter(r => !r.deleted && (r._seen || 'ok') !== r.status), dch = danStatusChanges();
+  if ((!changed.length && !dch.length) || document.querySelector('.modal')) return;
+  showModal(`<h2>🔔 記録の判定が変わりました</h2><div class="list">${dch.map(r => { const d = danById(r.danId); return `<div class="item">
+    <div class="row between"><strong>🏯 段位道場 ${d ? esc(d.version + ' ' + d.name) : ''}</strong>${danEmblem(r.result, r.frame)}</div>
+    <div class="muted">${fmtDate(r.playedAt)}</div>
+    ${r.status === 'rejected' ? `<div><span class="badge b-ng">却下</span> 理由：${esc(r.rejectReason || '（未記入）')}</div>
+      <div class="muted">この挑戦は<b>あなたの記録としては残ります</b>。心当たりがない場合は管理者に連絡してください。</div>` : '<div><span class="badge b-ok">却下取消</span></div>'}</div>`; }).join('')}${changed.map(r => `<div class="item">
     <div class="row between"><strong>${esc(songName(getSong(r.songId)))}</strong><span class="num">${fmtN(r.score)}</span></div>
     <div class="muted">${fmtDate(r.playedAt)}</div>
     ${r.status === 'rejected' ? `<div><span class="badge b-ng">却下</span> 理由：${esc(r.rejectReason || '（未記入）')}</div>
       <div class="muted">この成績は<b>あなたの記録としては残り</b>、履歴・自己ベスト・王冠には引き続き反映されます。<b>ランキングには登録されません。</b>心当たりがない場合は管理者に連絡してください。</div>`
       : '<div><span class="badge b-ok">却下取消</span> ランキングの対象に戻りました。</div>'}</div>`).join('')}</div>`);
-  changed.forEach(r => { r._seen = r.status; }); save();
+  changed.forEach(r => { r._seen = r.status; }); dch.forEach(r => { r._seen = r.status; }); save();
 }
 let syncTimer = null;
 function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(() => runSync(false), ms == null ? 400 : ms); }
@@ -357,9 +377,10 @@ let legacyServer = false; // v2.3以前のサーバー（syncAllが無い）な�
 
 /** 送信する分を選び、送信後に「送信済み」にするための控えを作る */
 function pendingBatch() {
-  const ps = pendingSongs(), pr = pendingRecs();
-  const recs = pr.slice(0, SYNC_BATCH);
-  return { ps, recs, more: pr.length > recs.length, snap: new Map([...ps, ...recs].map(x => [x.id, x.updatedAt])) };
+  const ps = pendingSongs(), pr = pendingRecs(), pd = pendingDanRecs();
+  const recs = pr.slice(0, SYNC_BATCH), drecs = pd.slice(0, 200);
+  return { ps, recs, drecs, more: pr.length > recs.length || pd.length > drecs.length,
+    snap: new Map([...ps, ...recs, ...drecs].map(x => [x.id, x.updatedAt])) };
 }
 function markSent(b, res) {
   const remap = res.remap || {};
@@ -381,13 +402,16 @@ async function uploadPhotos(auth) {
 async function syncAllOnce(auth) {
   const full = !db.cursor || !db.fullAt || Date.now() - ts(db.fullAt) > FULL_SYNC_DAYS * DAY_MS;
   const b = pendingBatch();
-  const res = await api('syncAll', Object.assign({ songs: b.ps.map(songPayload), records: b.recs.map(recPayload), since: full ? null : db.cursor }, auth),
-    b.recs.length > 100 ? 90000 : 30000);
+  const res = await api('syncAll', Object.assign({ songs: b.ps.map(songPayload), records: b.recs.map(recPayload),
+    danRecords: b.drecs.map(danRecPayload), since: full ? null : db.cursor }, auth), b.recs.length > 100 ? 90000 : 30000);
   applyRemap(res.remap);
   markSent(b, res);
   mergeServerSongs(res.songs, !!res.full);
   db.events = res.events || []; touch();
   mergeMine(res.records);
+  // 段位道場（v2.6以降のサーバーだけが返す）
+  if (res.dans) mergeServerDans(res.dans, !!res.full);
+  if (res.danRecords) { markDanSent(b.snap, res.danAccepted); mergeMyDanRecs(res.danRecords); }
   if (res.player && res.player.name) db.player.name = res.player.name;
   db.cursor = res.cursor || null;
   if (res.full) db.fullAt = isoLocal();
@@ -399,6 +423,7 @@ async function syncLegacy(auth) {
   const pub = await api('getPublic', {});
   mergeServerSongs(pub.songs, true);
   db.events = pub.events || []; touch();
+  if (pub.dans) mergeServerDans(pub.dans, true);
   if (!auth) return false;
   const b = pendingBatch();
   if (b.ps.length || b.recs.length) {
@@ -428,6 +453,7 @@ async function runSync(manual) {
         legacyServer = true; more = await syncLegacy(auth);
       }
       await uploadPhotos(auth);
+      await uploadDanPhotos(auth);
     }
     if (auth) { noticeStatusChanges(); syncSt.authError = false; }
     if (more) syncSt.again = true; // 送りきれなかった分は続けて送る
@@ -455,6 +481,7 @@ function go(v) {
   if (v !== 'input') leaveEdit();
   if (v !== 'songs' || state.view === 'songs') { state.songForm = null; state.detail = null; } // 楽曲タブを押し直すと一覧に戻る
   if (v === 'history' && state.view === 'history') state.rec.stack = []; // 記録タブを押し直すとメニューに戻る
+  if (v === 'dan' && state.view === 'dan') danSt.stack = []; // 段位タブを押し直すと一覧に戻る
   state.view = v; render(); window.scrollTo(0, 0);
 }
 function refreshChrome() {
@@ -473,7 +500,7 @@ function refreshChrome() {
 }
 function render() {
   refreshChrome();
-  ({ input: viewInput, history: viewHistory, songs: viewSongs, mydata: viewMyData })[state.view]();
+  ({ input: viewInput, history: viewHistory, dan: viewDan, songs: viewSongs, mydata: viewMyData })[state.view]();
 }
 
 /* ===================== 入力画面 ===================== */
@@ -742,10 +769,10 @@ function openChartStats(id) { state.view = 'history'; state.rec.stack = [{ t: 'c
 const pctStr = (n, d) => d ? (n / d * 100).toFixed(2) + '%' : '—';
 const goodRate = r => { const t = r.good + r.ok + r.bad; return t ? r.good / t : null; };
 /** 譜面ごとの自分の成績（削除済みは除く・却下は含む） */
-function chartStats() { return cached('chartStats', chartStatsCalc); }
+function chartStats() { danPrefs(); return cached('chartStats', chartStatsCalc, danSt.incDan); }
 function chartStatsCalc() {
   const m = new Map();
-  for (const r of activeRecs()) {
+  for (const r of danSt.incDan ? activeRecs().concat(danVirtualRecs()) : activeRecs()) {
     if (!r.songId) continue;
     let x = m.get(r.songId);
     if (!x) { x = { recs: [], best: null, bestRec: null, crown: 'none', last: 0 }; m.set(r.songId, x); }
@@ -808,7 +835,8 @@ function viewHistory() {
 /** 記録1件の行。compact=true は譜面別の一覧用（曲名・難易度を省き、日時を見出しにする） */
 function recItem(r, compact) {
   const s = getSong(r.songId), st = rankState(r);
-  const badges = (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
+  const badges = r._dan ? danBadge(r) + (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') + (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '') :
+    (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') +
     (r.mismatch ? '<span class="badge b-warn">自動計算と不一致</span>' : '') +
     (r.scoreSource === 'none' ? '<span class="badge b-warn">スコアなし</span>' : '') +
     (st === 'ok' ? '<span class="badge b-ok">📷 ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">📷 送信待ち</span>' :
@@ -821,7 +849,12 @@ function recItem(r, compact) {
     <div class="row between" style="margin-top:4px;flex-wrap:nowrap"><div>${badges}</div><button class="btn sub small" data-play="${esc(r.id)}">詳細</button></div></div>`;
 }
 function bindPlayLinks() {
-  document.querySelectorAll('[data-play]').forEach(el => el.onclick = e => { e.stopPropagation(); recPush({ t: 'play', id: el.dataset.play }); });
+  document.querySelectorAll('[data-play]').forEach(el => el.onclick = e => {
+    e.stopPropagation();
+    const id = el.dataset.play;
+    if (id.includes('#')) openDanRec(id.split('#')[0]); // 段位内プレイは挑戦結果の画面へ
+    else recPush({ t: 'play', id });
+  });
 }
 function viewRecent() {
   const list = recsByDate();
@@ -866,19 +899,21 @@ function viewAllRecs(chartId) {
   const s = chartId ? getSong(chartId) : null;
   const o = state.rec.allSort[chartId ? 'chart' : 'all'];
   if (chartId && o.k === 'title') o.k = null;
-  const base = chartId ? recsByDate().filter(r => r.songId === chartId) : recsByDate();
+  let base = chartId ? recsByDate().filter(r => r.songId === chartId) : recsByDate();
+  if (chartId && danSt.incDan) base = base.concat(danVirtualFor(chartId)).sort((a, b) => ts(b.playedAt) - ts(a.playedAt) || ts(b.createdAt) - ts(a.createdAt));
   const list = sortRecs(base, o);
   const page = Math.min(state.rec.allPage, Math.max(1, Math.ceil(list.length / PAGE)));
   const mark = k => o.k === k ? (o.dir > 0 ? ' ▲' : ' ▼') : '';
   $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
   ${s ? chartHead(s) : ''}
+  ${chartId ? incDanToggle(chartId) : ''}
   <div class="card"><h2>すべての記録（${list.length}件）</h2>
     ${list.length > 1 ? `<div class="rsort"><span class="muted">並び替え</span>${ALL_SORTS.filter(([k]) => !(chartId && k === 'title'))
       .map(([k, l]) => `<button type="button" class="chip${o.k === k ? ' on' : ''}" data-asort="${k}">${l}${mark(k)}</button>`).join('')}</div>` : ''}
     ${list.length ? `<div class="list">${list.slice((page - 1) * PAGE, page * PAGE).map(r => recItem(r, !!chartId)).join('')}</div>` : '<div class="muted">記録がありません。</div>'}
     ${pager(list.length, page, 'all')}</div>`;
   $('#back').onclick = recBack;
-  bindPlayLinks();
+  bindPlayLinks(); bindIncDan();
   document.querySelectorAll('[data-asort]').forEach(b => b.onclick = () => {
     const k = b.dataset.asort;
     if (o.k !== k) { o.k = k; o.dir = 1; } else if (o.dir === 1) o.dir = -1; else { o.k = null; o.dir = 1; }
@@ -1046,6 +1081,7 @@ function viewChart(id) {
   }
   $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
   ${chartHead(s, `<div class="muted" style="margin-top:6px">最終プレイ：${x ? fmtDate(new Date(x.last)) : '—'}<br>自己ベスト：${b ? fmtDate(b.playedAt) : '—'}</div>`)}
+  ${incDanToggle(id)}
   <div class="card prscore">${crownHtml(x ? x.crown : 'none').replace('crown ', 'crown xl ')}
     <div><div class="muted">自己ベスト</div><div class="prnum">${b ? fmtN(b.score) : '—'}</div></div></div>
   ${x ? body : `<div class="card muted">まだこの譜面の記録はありません。<button class="btn" id="playThis">この譜面を記録する</button></div>`}`;
@@ -1053,7 +1089,7 @@ function viewChart(id) {
   if ($('#allBtn')) $('#allBtn').onclick = () => recPush({ t: 'all', chart: id });
   if ($('#calBtn')) $('#calBtn').onclick = () => toast('カレンダー・グラフ表示は準備中です');
   if ($('#playThis')) $('#playThis').onclick = () => { state.pick = { title: s.title, songId: s.id }; go('input'); };
-  bindPlayBody();
+  bindPlayBody(); bindIncDan();
 }
 
 /* ----- 個別プレイ結果 ----- */
@@ -1076,10 +1112,10 @@ function viewPlay(id) {
 function playBody(r, embedded) {
   const s = getSong(r.songId), st = rankState(r);
   const total = r.good + r.ok + r.bad;
-  const badges = (st === 'ok' ? '<span class="badge b-ok">ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">写真送信待ち</span>' :
+  const badges = r._dan ? danBadge(r) : (st === 'ok' ? '<span class="badge b-ok">ランキング対象</span>' : st === 'waiting' ? '<span class="badge b-warn">写真送信待ち</span>' :
     st === 'rejected' ? '<span class="badge b-ng">却下・ランキング対象外</span>' : '<span class="badge b-mute">写真なし（ランキング対象外）</span>') +
     (r.scoreSource === 'manual' ? '<span class="badge b-ka">手入力</span>' : '') + (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '');
-  const photo = r.photoId || r.localPhoto
+  const photo = r._dan ? `<button type="button" class="btn sub prphoto" data-play="${esc(r.id)}">🏯 段位の挑戦結果を見る</button>` : r.photoId || r.localPhoto
     ? `<button type="button" class="btn sub prphoto" data-photo="${esc(r.id)}">📷 写真を表示${r.localPhoto && !r.photoId ? '（送信待ち）' : ''}</button>`
     : `<label class="prphoto add">＋ 写真を追加<input type="file" accept="image/*" data-addphoto="${esc(r.id)}"></label>`;
   const jr = (cls, label, n, p) => `<div class="jr"><span class="jl ${cls}">${label}</span><span class="jn num">${n}</span><span class="jp num${p === '---' ? ' na' : ''}">${p}</span></div>`;
@@ -1383,7 +1419,7 @@ function viewMyData() {
     <label>バックアップ・旧バージョンのデータを読み込む</label>
     <input type="file" id="imFile" accept=".json,application/json,text/plain">
   </div>
-  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.4・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
+  <div class="muted" style="text-align:center;margin:8px 0">太鼓スコア記録 v2.6・端末ID ${esc(db.player.deviceId)}・スコア計算はAC16ニジイロ以降の仕様</div>`;
 
   if (registered()) {
     $('#nameSave').onclick = saveName;
@@ -1404,7 +1440,7 @@ function viewMyData() {
   if ($('#syncBtn')) $('#syncBtn').onclick = () => runSync(true);
   $('#exFile').onclick = () => {
     const o = { app: APP, schema: SCHEMA, player: { id: db.player.id, name: db.player.name, deviceId: db.player.deviceId },
-      exportedAt: isoLocal(), songs: db.songs, records: db.records };
+      exportedAt: isoLocal(), songs: db.songs, records: db.records, danRecords: db.danRecords };
     download(`taiko_${db.player.id || 'noid'}_${ymd(new Date())}.json`, JSON.stringify(o, null, 2));
     db.lastExportAt = o.exportedAt; save();
   };
@@ -1482,8 +1518,14 @@ function importData(o) {
     r._sv = null; r.photoId = null; r.localPhoto = false; r.status = 'ok';
     db.records.push(r); ra++;
   }
+  let da = 0;
+  if (takeRecs) for (const r of (o.danRecords || []).map(normDanRec).filter(Boolean)) {
+    if (db.danRecords.some(x => x.id === r.id)) continue;
+    Object.assign(r, { _sv: null, photoIds: [], localPhotos: [], delPhotos: [], status: 'ok' });
+    db.danRecords.push(r); da++;
+  }
   save(); render(); scheduleSync();
-  alert(`読み込みました。\n譜面: 追加 ${sa}件` + (takeRecs ? `\n記録: 追加 ${ra}件` : '') + (API_URL ? '\n（このあと自動でサーバーに送信します）' : ''));
+  alert(`読み込みました。\n譜面: 追加 ${sa}件` + (takeRecs ? `\n記録: 追加 ${ra}件` + (da ? `\n段位の挑戦: 追加 ${da}件` : '') : '') + (API_URL ? '\n（このあと自動でサーバーに送信します）' : ''));
 }
 
 /* ===================== 起動 ===================== */

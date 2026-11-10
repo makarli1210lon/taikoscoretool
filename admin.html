@@ -28,6 +28,8 @@
 <div class="toast" id="toast"></div>
 <script src="config.js"></script>
 <script src="common.js"></script>
+<script src="dan.js"></script>
+<script src="dan-admin.js"></script>
 <script>
 'use strict';
 const KEY_LS = 'taikoAdminKey';
@@ -38,7 +40,7 @@ const st = { tab: 'rank', rankMode: 'event', rankEvent: '', rankChart: '', detai
   songForm: null, songQ: '', songGenre: '', songSort: 'title',
   dataPlayer: '', dataQ: '', dataFlag: 'need', backups: null };
 const photoCache = new Map();
-const TABS = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー'], ['data', '🗂 スコアデータ'], ['manage', '⚙ 管理']];
+const TABS = [['rank', '🏆 ランキング'], ['events', '📅 大会'], ['songs', '🎵 楽曲'], ['players', '👤 プレイヤー'], ['data', '🗂 スコアデータ'], ['dan', '🏯 段位道場データ'], ['manage', '⚙ 管理']];
 
 const getSong = id => id && D ? (D.songs.find(s => s.id === id) || null) : null;
 const groupMap = () => groupSongs(D.songs);
@@ -79,7 +81,7 @@ function render() {
   const need = recs().filter(needsCheck).length;
   $('#view').innerHTML = `<div class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}" class="${st.tab === k ? 'on' : ''}">${l}${k === 'data' && need ? ` <span class="badge" style="color:#fff;border-color:#fff">${need}</span>` : ''}</button>`).join('')}</div><div id="tabBody"></div>`;
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { st.tab = b.dataset.tab; st.detail = null; render(); window.scrollTo(0, 0); });
-  ({ rank: viewRank, events: viewEvents, songs: viewSongs, players: viewPlayers, data: viewData, manage: viewManage })[st.tab]();
+  ({ rank: viewRank, events: viewEvents, songs: viewSongs, players: viewPlayers, data: viewData, dan: viewDanData, manage: viewManage })[st.tab]();
 }
 function viewLogin() {
   $('#view').innerHTML = `<div class="card" style="max-width:480px;margin:40px auto">
