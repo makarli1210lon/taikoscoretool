@@ -472,6 +472,7 @@ async function runSync(manual) {
 function afterSync() {
   refreshChrome();
   if (state.view === 'input') { renderInputExtras(); if (!state.pick.title) renderPickList(); else renderPicker(); updateInput(); }
+  else if (state.view === 'dan' && danEditing()) { /* 段位の挑戦を入力中は描き直さない（入力が消えないように） */ }
   else if (!(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) render();
 }
 

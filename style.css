@@ -382,7 +382,7 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
 .photos4>.ph .x{position:absolute;top:2px;right:2px;width:22px;height:22px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:13px;cursor:pointer;padding:0}
 .photos4>.add{border:1.5px dashed var(--line);background:transparent;font-size:20px;cursor:pointer}
 .photos4>.add input{position:absolute;inset:0;opacity:0;cursor:pointer}
-.livebox{position:sticky;bottom:calc(64px + env(safe-area-inset-bottom));background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:10px 12px;margin-top:12px;z-index:2}
+.livebox{background:var(--card);border:2px solid var(--accent);border-radius:12px;padding:10px 12px;margin-top:14px}
 .livebox .lt{display:flex;justify-content:space-between;align-items:center;font-weight:800;margin-bottom:4px}
 .chkline{display:flex;align-items:center;gap:6px;font-size:14px;margin:0 0 8px;color:var(--text);cursor:pointer}
 .chkline input{width:auto}

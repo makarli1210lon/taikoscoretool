@@ -133,7 +133,9 @@ function danStatusChanges() {
 
 /* ===================== 画面 ===================== */
 function danGo(v) { danSt.stack.push(v); render(); window.scrollTo(0, 0); }
-function danBack() { danSt.stack.pop(); render(); window.scrollTo(0, 0); }
+function danBack() { if (danEditing()) danSt.form = null; danSt.stack.pop(); render(); window.scrollTo(0, 0); }
+/** 段位の挑戦を入力・編集している最中か */
+const danEditing = () => { const top = danSt.stack[danSt.stack.length - 1]; return !!(top && top.t === 'form'); };
 function openDanRec(recId) { state.view = 'dan'; danSt.stack = [{ t: 'rec', id: recId }]; render(); window.scrollTo(0, 0); }
 function viewDan() {
   danPrefs();
@@ -329,7 +331,7 @@ function viewDanForm(danId, editId) {
   if (!danSt.form || danSt.form.recId !== (rec && rec.id) || danSt.form.danId !== danId) {
     // 写真の欄：[{ kind:'server', id } | { kind:'local', b64 } | null] × 4
     const ph = [0, 1, 2, 3].map(i => rec && rec.localPhotos.includes(i) ? { kind: 'pending' } : rec && rec.photoIds[i] ? { kind: 'server', id: rec.photoIds[i] } : null);
-    danSt.form = { recId: rec && rec.id, danId, photos: ph, changed: new Set() };
+    danSt.form = { recId: rec && rec.id, danId, photos: ph, changed: new Set(), vals: {} };
   }
   const v = (i, k) => rec && rec.tracks[i] ? (rec.tracks[i][k] ?? '') : '';
   const pa = toLocalInput(rec ? new Date(rec.playedAt) : new Date());
@@ -364,8 +366,13 @@ function viewDanForm(danId, editId) {
   </div>`;
   $('#back').onclick = danBack;
   if ($('#dcancel')) $('#dcancel').onclick = danBack;
-  if ($('#soulMax')) $('#soulMax').onclick = () => { $('#dsoul').value = 100; danFormUpdate(d, charts); };
-  document.querySelectorAll('#view input[type=number]').forEach(el => { el.oninput = () => danFormUpdate(d, charts); el.onfocus = () => el.select(); });
+  // 入力中の値を控えておき、画面が描き直されても戻す
+  const vals = danSt.form.vals;
+  Object.entries(vals).forEach(([id, v]) => { const el = document.getElementById(id); if (el) el.value = v; });
+  const keep = el => { vals[el.id] = el.value; };
+  if ($('#soulMax')) $('#soulMax').onclick = () => { $('#dsoul').value = 100; keep($('#dsoul')); danFormUpdate(d, charts); };
+  document.querySelectorAll('#view input[type=number]').forEach(el => { el.oninput = () => { keep(el); danFormUpdate(d, charts); }; el.onfocus = () => el.select(); });
+  $('#dplayed').onchange = e => keep(e.target);
   $('#dsave').onclick = () => saveDanRec(d, charts, rec);
   renderDanPhotos();
   danFormUpdate(d, charts);
