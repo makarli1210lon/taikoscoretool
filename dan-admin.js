@@ -61,8 +61,6 @@ function blankDanForm(version, rank) {
 /* ----- お題の編集 ----- */
 function viewDanFormAdmin() {
   const f = dst.form;
-  const songs = D.songs.filter(s => !s.deleted).sort(songSort);
-  const labelOf = id => { const s = adGetSong(id); return s ? chartLabel(s) : ''; };
   const condRow = (c, i) => {
     const per = c.scope === 'per';
     const vals = lv => per ? [0, 1, 2].map(j => `<input type="number" inputmode="numeric" min="0" data-cv="${i}" data-lv="${lv}" data-j="${j}" value="${(c[lv] || [])[j] ?? ''}" placeholder="${j + 1}曲目">`).join('')
@@ -72,7 +70,10 @@ function viewDanFormAdmin() {
         <select data-ct="${i}" style="width:auto">${DAN_COND_ORDER.map(k => `<option value="${k}"${c.type === k ? ' selected' : ''}>${DAN_COND[k]}</option>`).join('')}</select>
         <select data-cs="${i}" style="width:auto"><option value="total"${!per ? ' selected' : ''}>3曲合計</option><option value="per"${per ? ' selected' : ''}>曲別</option></select>
         <select data-co="${i}" style="width:auto"><option value="ge"${c.op !== 'lt' ? ' selected' : ''}>以上</option><option value="lt"${c.op === 'lt' ? ' selected' : ''}>未満</option></select>
-        <button type="button" class="btn sub small danger" data-cdel="${i}" style="margin-left:auto">この条件を外す</button></div>
+        <span style="margin-left:auto"></span>
+        <button type="button" class="btn sub small" data-cup="${i}"${i === 0 ? ' disabled' : ''} aria-label="上へ">↑</button>
+        <button type="button" class="btn sub small" data-cdown="${i}"${i === f.conds.length - 1 ? ' disabled' : ''} aria-label="下へ">↓</button>
+        <button type="button" class="btn sub small danger" data-cdel="${i}">この条件を外す</button></div>
       <label>合格${per ? '（1曲目／2曲目／3曲目）' : ''}</label><div class="grid${per ? '3' : '1'}">${vals('red')}</div>
       <label class="gold-t">金合格${per ? '（1曲目／2曲目／3曲目）' : ''}（空欄なら合格と同じ）</label><div class="grid${per ? '3' : '1'}">${vals('gold')}</div></div>`;
   };
@@ -81,11 +82,13 @@ function viewDanFormAdmin() {
     <div class="grid2">
       <div><label>バージョン</label><input id="dfVer" value="${esc(f.version)}" list="dverList"><datalist id="dverList">${adVersions().map(v => `<option value="${esc(v)}">`).join('')}</datalist></div>
       <div><label>段位</label><select id="dfRank">${DAN_NAMES.map((n, r) => `<option value="${r}"${f.rank === r ? ' selected' : ''}>${n}</option>`).join('')}</select></div></div>
-    <label>課題曲（曲名を入力して候補から選択）</label>
-    <datalist id="dsongList">${songs.map(s => `<option value="${esc(chartLabel(s))}">`).join('')}</datalist>
-    ${[0, 1, 2].map(i => `<div class="row" style="flex-wrap:nowrap;margin-top:6px"><b style="width:3.5em">${i + 1}曲目</b>
-      <input data-chart="${i}" list="dsongList" value="${esc(labelOf(f.chartIds[i]))}" placeholder="曲名［コース］" style="flex:1"></div>
-      <div class="muted" id="dfc${i}" style="margin-left:3.5em;font-size:12px"></div>`).join('')}
+    <label>課題曲</label>
+    ${[0, 1, 2].map(i => { const s = adGetSong(f.chartIds[i]); return `<div class="pickrow">
+      <b class="no">${i + 1}曲目</b>
+      <button type="button" class="pickbtn" data-pick="${i}">${s ? `${cicon(s.course)}<span class="nm">${esc(s.title)}</span><span class="muted">${esc(cname(s))}・★${s.level}・${dn(s.maxCombo)}</span>`
+        : '<span class="muted">🔍 曲を検索して選ぶ</span>'}</button>
+      ${s ? `<button type="button" class="btn sub small" data-unpick="${i}" aria-label="${i + 1}曲目を外す">×</button>` : ''}</div>
+      <div class="muted" id="dfc${i}" style="margin:2px 0 0 4.2em;font-size:12px"></div>`; }).join('')}
     <div class="grid2">
       <div><label>魂ゲージ（合格・%以上。条件なしは空欄）</label><input id="dfSoulR" type="number" min="0" max="100" value="${f.soulRed ?? ''}"></div>
       <div><label class="gold-t">魂ゲージ（金合格・%以上）</label><input id="dfSoulG" type="number" min="0" max="100" value="${f.soulGold ?? ''}"></div></div>
@@ -99,16 +102,16 @@ function viewDanFormAdmin() {
   </div>
   <div class="card"><h2>プレイヤー画面での見え方</h2><div id="dfPrev"></div></div>`;
   const style = document.createElement('style');
-  style.textContent = '.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.grid1{display:grid;grid-template-columns:1fr}';
+  style.textContent = '.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.grid1{display:grid;grid-template-columns:1fr}' +
+    '.pickrow{display:flex;align-items:center;gap:8px;margin-top:6px}.pickrow .no{width:3.6em;flex-shrink:0}' +
+    '.pickbtn{flex:1;min-width:0;display:flex;align-items:center;gap:8px;text-align:left;font:inherit;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;cursor:pointer}' +
+    '.pickbtn .nm{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pickbtn .muted{font-size:12px;white-space:nowrap;margin-left:auto}';
   $('#danBody').appendChild(style);
-  const byLabel = new Map(songs.map(s => [chartLabel(s), s.id]));
   const sync = () => {
     f.version = $('#dfVer').value.trim(); f.rank = +$('#dfRank').value;
     [0, 1, 2].forEach(i => {
-      const v = document.querySelector(`[data-chart="${i}"]`).value.trim();
-      f.chartIds[i] = byLabel.get(v) || '';
       const s = adGetSong(f.chartIds[i]);
-      $('#dfc' + i).innerHTML = s ? `${cicon(s.course)} ★${s.level}・最大コンボ ${dn(s.maxCombo)}${s.shoko ? '' : '・<span class="ng-t">初項が未登録（スコアは手入力になります）</span>'}` : v ? '<span class="ng-t">候補から選んでください</span>' : '';
+      $('#dfc' + i).innerHTML = s && !s.shoko ? '<span class="ng-t">初項が未登録です（プレイヤーはスコアを手入力することになります）</span>' : '';
     });
     f.soulRed = nn($('#dfSoulR').value); f.soulGold = nn($('#dfSoulG').value);
     f.videoUrl = $('#dfVideo').value.trim(); f.note = $('#dfNote').value;
@@ -130,11 +133,63 @@ function viewDanFormAdmin() {
     viewDanFormAdmin();
   });
   document.querySelectorAll('[data-cdel]').forEach(b => b.onclick = () => { sync(); f.conds.splice(+b.dataset.cdel, 1); viewDanFormAdmin(); });
+  const move = (i, j) => { sync(); const c = f.conds; [c[i], c[j]] = [c[j], c[i]]; viewDanFormAdmin(); };
+  document.querySelectorAll('[data-cup]').forEach(b => b.onclick = () => move(+b.dataset.cup, +b.dataset.cup - 1));
+  document.querySelectorAll('[data-cdown]').forEach(b => b.onclick = () => move(+b.dataset.cdown, +b.dataset.cdown + 1));
+  document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { sync(); pickChart(f.chartIds[+b.dataset.pick], id => { f.chartIds[+b.dataset.pick] = id; viewDanFormAdmin(); }); });
+  document.querySelectorAll('[data-unpick]').forEach(b => b.onclick = () => { sync(); f.chartIds[+b.dataset.unpick] = ''; viewDanFormAdmin(); });
   if ($('#dfAddCond')) $('#dfAddCond').onclick = () => { sync(); f.conds.push({ type: 'ok', scope: 'total', op: 'lt', red: null, gold: null }); viewDanFormAdmin(); };
   $('#dfBack').onclick = () => { dst.form = null; render(); };
   $('#dfSave').onclick = () => saveDanDef(false);
   if ($('#dfDel')) $('#dfDel').onclick = () => { if (confirm('このお題を削除しますか？（挑戦記録は残りますが、プレイヤー画面には表示されなくなります）')) saveDanDef(true); };
   sync();
+}
+/* ----- 課題曲を検索して選ぶ ----- */
+const pickSt = { q: '', course: '', lv: '' };
+function pickChart(curId, onPick) {
+  const m = showModal(`<h2>課題曲を選ぶ</h2>
+    <input id="pkq" type="search" placeholder="曲名・作曲者・ジャンル（ひらがな・カタカナ・全角半角は区別しません）" value="${esc(pickSt.q)}" autocomplete="off">
+    <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap" id="pkc">
+      ${[['', 'すべて'], ...Object.entries(COURSES)].map(([k, l]) => `<button type="button" class="btn small${pickSt.course === k ? '' : ' sub'}" data-pkc="${k}">${k ? cicon(k) + ' ' : ''}${esc(l)}</button>`).join('')}
+      <select id="pklv" style="width:auto;margin-left:auto"><option value="">★すべて</option>${[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `<option value="${n}"${String(pickSt.lv) === String(n) ? ' selected' : ''}>★${n}</option>`).join('')}</select>
+    </div>
+    <div id="pkres" class="pklist"></div>`, true);
+  const st = document.createElement('style');
+  st.textContent = '.pklist{margin-top:10px;max-height:min(60vh,520px);overflow:auto;border:1px solid var(--line);border-radius:10px}' +
+    '.pkitem{display:flex;align-items:center;gap:8px;width:100%;font:inherit;text-align:left;background:var(--card);color:var(--text);border:0;border-top:1px solid var(--line);padding:9px 10px;cursor:pointer}' +
+    '.pkitem:first-child{border-top:0}.pkitem:hover,.pkitem:focus{background:var(--soft)}.pkitem.cur{background:var(--soft);font-weight:700}' +
+    '.pkitem .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pkitem .meta{font-size:12px;color:var(--muted);white-space:nowrap}' +
+    '.pkitem mark{background:#ffe27a;color:inherit;border-radius:2px}';
+  m.appendChild(st);
+  const all = D.songs.filter(s => !s.deleted);
+  const gm = groupSongs(D.songs);
+  const show = () => {
+    const qk = searchKey(pickSt.q);
+    let list = all.filter(s => (!pickSt.course || s.course === pickSt.course) && (!pickSt.lv || s.level === +pickSt.lv));
+    if (qk) {
+      // 一致した位置が前ほど上に（曲名の先頭一致 → 曲名の途中 → 作曲者・ジャンル）
+      list = list.map(s => { const tk = searchKey(s.title), i = tk.indexOf(qk), g = gm.get(s.title) || {};
+        const o = i >= 0 ? i : searchKey((g.composer || '') + ' ' + (s.genre || '')).includes(qk) ? 1000 : -1; return { s, o }; })
+        .filter(x => x.o >= 0).sort((a, b) => a.o - b.o || songSort(a.s, b.s)).map(x => x.s);
+    } else list.sort(songSort);
+    const LIMIT = 80, mark = s => { if (!qk) return esc(s.title); // 曲名の一致部分を強調（そろえた文字で位置を探すので、見つからなければそのまま）
+      const i = s.title.toLowerCase().indexOf(pickSt.q.trim().toLowerCase()); const q = pickSt.q.trim();
+      return i >= 0 && q ? esc(s.title.slice(0, i)) + '<mark>' + esc(s.title.slice(i, i + q.length)) + '</mark>' + esc(s.title.slice(i + q.length)) : esc(s.title); };
+    m.querySelector('#pkres').innerHTML = list.length
+      ? list.slice(0, LIMIT).map(s => `<button type="button" class="pkitem${s.id === curId ? ' cur' : ''}" data-pkid="${esc(s.id)}">${cicon(s.course)}<span class="nm">${mark(s)}</span>
+          <span class="meta">${esc(cname(s))}・★${s.level}・${s.maxCombo ? dn(s.maxCombo) + 'コンボ' : 'コンボ未登録'}${s.shoko ? '' : '・初項なし'}</span></button>`).join('') +
+        (list.length > LIMIT ? `<div class="muted" style="padding:8px 10px">ほか ${list.length - LIMIT}譜面。曲名やコースで絞り込んでください。</div>` : '')
+      : '<div class="muted" style="padding:12px">見つかりませんでした。先に「楽曲」タブで譜面を登録してください。</div>';
+    m.querySelectorAll('[data-pkid]').forEach(b => b.onclick = () => { m.remove(); onPick(b.dataset.pkid); });
+  };
+  const q = m.querySelector('#pkq');
+  q.oninput = () => { pickSt.q = q.value; show(); };
+  q.onkeydown = e => { if (e.key === 'Enter') { const first = m.querySelector('[data-pkid]'); if (first) first.click(); } };
+  m.querySelectorAll('[data-pkc]').forEach(b => b.onclick = () => {
+    pickSt.course = b.dataset.pkc;
+    m.querySelectorAll('[data-pkc]').forEach(x => x.classList.toggle('sub', x.dataset.pkc !== pickSt.course)); show(); });
+  m.querySelector('#pklv').onchange = e => { pickSt.lv = e.target.value; show(); };
+  show(); q.focus(); q.select();
 }
 async function saveDanDef(del) {
   const f = dst.form;

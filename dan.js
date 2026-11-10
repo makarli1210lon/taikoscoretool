@@ -187,10 +187,11 @@ function danBodyHtml(dan, charts, mode, opts) {
     <div class="dsec"><h3>合格条件</h3><div class="seg2" role="group"><button type="button" data-dmode="red" class="${mode === 'red' ? 'on red' : ''}">赤合格</button><button type="button" data-dmode="gold" class="${mode === 'gold' ? 'on gold' : ''}">金合格</button></div></div>
     <div class="dconds">
       ${soul != null ? `<div class="dq soul"><div class="dk">魂ゲージ</div><div class="dv"><b>${soul}%</b><small>以上</small></div>${danGauge(soul)}</div>` : ''}
-      ${(dan.conds || []).filter(c => c.scope !== 'per').map(c => `<div class="dq"><div class="dk">${DAN_COND[c.type]}<span class="dsc">3曲合計</span></div>
-        <div class="cbar"><b>${dn(val(c, mode))}</b><small>${DAN_OP[c.op]}</small></div></div>`).join('')}
-      ${(dan.conds || []).filter(c => c.scope === 'per').map(c => `<div class="dq per"><div class="dk">${DAN_COND[c.type]}</div>
-        <div class="c3">${[0, 1, 2].map(i => `<div class="t${i + 1}"><span>${i + 1}曲目</span><b>${dn((val(c, mode) || [])[i])}</b><small>${DAN_OP[c.op]}</small></div>`).join('')}</div></div>`).join('')}
+      ${(dan.conds || []).map(c => c.scope !== 'per'
+        ? `<div class="dq"><div class="dk">${DAN_COND[c.type]}<span class="dsc">3曲合計</span></div>
+          <div class="cbar"><b>${dn(val(c, mode))}</b><small>${DAN_OP[c.op]}</small></div></div>`
+        : `<div class="dq per"><div class="dk">${DAN_COND[c.type]}</div>
+          <div class="c3">${[0, 1, 2].map(i => `<div class="t${i + 1}"><span>${i + 1}曲目</span><b>${dn((val(c, mode) || [])[i])}</b><small>${DAN_OP[c.op]}</small></div>`).join('')}</div></div>`).join('')}
     </div>${opts.after || ''}</div>`;
 }
 /** 条件の文字表記（例：「可の数 15未満（3曲合計）」「連打数 49/35/34以上（曲別）」） */

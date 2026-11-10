@@ -141,7 +141,8 @@ const SORTS = { title: '曲名順', added: '追加日が新しい順', addedOld:
 function filterSortGroups(gm, q, genre, sort) {
   const t = String(q || '').trim().toLowerCase();
   const gkey = g => String(g || '').replace(/[™\s]/g, '');
-  let gs = [...gm.values()].filter(g => !t || (g.title + ' ' + g.genre + ' ' + g.composer).toLowerCase().includes(t));
+  const tk = searchKey(t);
+  let gs = [...gm.values()].filter(g => !tk || searchKey(g.title + ' ' + g.genre + ' ' + g.composer).includes(tk));
   if (genre === '__other') gs = gs.filter(g => !genreColor(g.genre));
   else if (genre) gs = gs.filter(g => gkey(g.genre) === gkey(genre));
   const byTitle = (a, b) => a.title.localeCompare(b.title, 'ja');
@@ -312,6 +313,12 @@ async function copyText(text) {
   }
   if (ok) toast('コピーしました'); else showText('長押しで全選択してコピーしてください', text);
   return ok;
+}
+/** 検索用に文字をそろえる：全角/半角・大文字/小文字・カタカナ/ひらがな・空白や「・」などの記号の違いを無視する */
+function searchKey(s) {
+  return String(s || '').normalize('NFKC').toLowerCase()
+    .replace(/[\u30a1-\u30f6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60))
+    .replace(/[\s・･\-‐－―ー〜~!！?？。、.,:：;；'"’”「」『』()（）［］\[\]【】☆★♪♡♥]/g, '');
 }
 function showModal(html, wide) {
   const m = document.createElement('div'); m.className = 'modal' + (wide ? ' wide' : '');

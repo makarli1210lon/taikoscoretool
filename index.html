@@ -637,7 +637,7 @@ function renderPickList() {
   const box = $('#pickList'); if (!box) return;
   const gm = groupMap(), t = state.pickQ.trim().toLowerCase(), evIds = activeEventChartIds();
   let gs = [...gm.values()];
-  if (t) gs = gs.filter(g => (g.title + ' ' + g.genre).toLowerCase().includes(t));
+  if (t) { const tk = searchKey(t); gs = gs.filter(g => searchKey(g.title + ' ' + g.genre).includes(tk)); }
   else {
     const last = cached('lastByTitle', () => {
       const m = new Map();
@@ -990,7 +990,7 @@ function renderDiffList() {
   const o = state.rec.diff, stats = chartStats(), t = o.q.trim().toLowerCase(), gm = groupMap();
   let rows = activeSongs().map(s => ({ s, x: stats.get(s.id) || null }))
     .filter(({ s, x }) => o.courses.has(s.course) && o.levels.has(s.level) && o.clear.has(clearOf(x)))
-    .filter(({ s }) => !t || (s.title + ' ' + ((gm.get(s.title) || {}).composer || '')).toLowerCase().includes(t));
+    .filter(({ s }) => !t || searchKey(s.title + ' ' + ((gm.get(s.title) || {}).composer || '')).includes(searchKey(t)));
   // 並べ替え：同じ列を押すたびに 昇順 → 降順 → 解除
   const tierRank = s => s.subLevel ? TIERS.length - TIERS.indexOf(s.subLevel.tier) : 0; // SS が最も高い
   const key = {
