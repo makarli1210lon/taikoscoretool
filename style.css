@@ -396,3 +396,4 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
   .tpan.t1{--tb:#1d3a24}.tpan.t2{--tb:#1b2f47}.tpan.t3{--tb:#45201d}
   .gold-t{color:#f2c14e}.b-dan{color:#b99cff}
 }
+.hint{font-size:12px;background:var(--soft);border-radius:8px;padding:6px 10px;color:var(--text)}

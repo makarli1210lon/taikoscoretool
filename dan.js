@@ -179,11 +179,11 @@ function danBodyHtml(dan, charts, mode, opts) {
   const notes = charts.every(c => c && c.maxCombo) ? charts.reduce((a, c) => a + c.maxCombo, 0) : null;
   const soul = mode === 'gold' && dan.soulGold != null ? dan.soulGold : dan.soulRed;
   const val = (c, lv) => c[lv] != null ? c[lv] : c.red;
-  return `<div class="dbody2${mode === 'gold' ? ' gmode' : ''}">
+  return `<div class="dbody2${mode === 'gold' ? ' gmode' : ''}">${opts.noTracks ? '' : `
     <div class="dsec"><h3>課題曲</h3><span class="dsub">ノーツ数 <b>${dn(notes)}</b></span></div>
     <div class="dtracks">${charts.map((s, i) => `<div class="dtr t${i + 1}"${s && opts.chartLink ? ` data-chart="${esc(s.id)}"` : ''}><div class="dl"><div class="tno">${i + 1}曲目</div>
       <div class="tt">${s ? cicon(s.course) + `<span>${esc(s.title)}</span>` : '<span class="muted">（楽曲が見つかりません）</span>'}</div></div>
-      <div class="dr"><div>${s ? '★' + s.level : ''}</div><div>${s ? dn(s.maxCombo) : ''}</div></div></div>`).join('')}</div>
+      <div class="dr"><div>${s ? '★' + s.level : ''}</div><div>${s ? dn(s.maxCombo) : ''}</div></div></div>`).join('')}</div>`}
     <div class="dsec"><h3>合格条件</h3><div class="seg2" role="group"><button type="button" data-dmode="red" class="${mode === 'red' ? 'on red' : ''}">赤合格</button><button type="button" data-dmode="gold" class="${mode === 'gold' ? 'on gold' : ''}">金合格</button></div></div>
     <div class="dconds">
       ${soul != null ? `<div class="dq soul"><div class="dk">魂ゲージ</div><div class="dv"><b>${soul}%</b><small>以上</small></div>${danGauge(soul)}</div>` : ''}

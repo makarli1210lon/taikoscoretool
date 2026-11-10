@@ -2,7 +2,7 @@
    ・通信できるときは常に最新のファイルを取得し、端末に保存し直す（更新はすぐ反映される）
    ・通信できない／4秒以内に応答がないときは、保存しておいたファイルで表示する
    ・サーバー（Google Apps Script）への送信はここでは扱わない（同じサイト内のファイルだけが対象） */
-const CACHE = 'taiko-score-v2.10';
+const CACHE = 'taiko-score-v2.12';
 const FILES = ['./', './index.html', './common.js', './dan.js', './dan-view.js', './style.css', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './fonts/dan-brush.woff2',
   ...['easy', 'normal', 'hard', 'oni', 'ura'].flatMap(c => [`./img/course-${c}.svg`, `./img/course-${c}-gray.svg`]),

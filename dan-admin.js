@@ -9,16 +9,52 @@ const adDanById = id => (D.dans || []).find(d => d.id === id) || null;
 const adCharts = d => [0, 1, 2].map(i => adGetSong((d.chartIds || [])[i]));
 const chartLabel = s => `${s.title}［${cname(s)}］`;
 const newDanId = () => { let id; do { id = 'd_' + rand(10); } while ((D.dans || []).some(d => d.id === id)); return id; };
+/* ----- 条件プリセット（段位ごとの条件の種類・順序・値の「ひな形」。お題を作るときに最初から入力しておくだけで、変更は自由） ----- */
+const adPresets = () => (D.danPresets || []).filter(p => !p.deleted);
+/** バージョン名に合うプリセットのセット（対象バージョンに名前が含まれているもの） */
+const presetSetFor = ver => adPresets().find(p => (p.versions || []).includes(String(ver || '').trim())) || null;
+const clone = o => JSON.parse(JSON.stringify(o));
+/** お題の画面で選んでいるプリセットのセット（未選択ならバージョン名に合うセット） */
+function preSetOf(f) {
+  if (!f.preSetManual) f.preSetId = (presetSetFor(f.version) || {}).id || f.preSetId || ((adPresets()[0] || {}).id);
+  return adPresets().find(p => p.id === f.preSetId) || null;
+}
+/** プリセットの内容をお題のフォームに入れる（あればtrue） */
+function applyPreset(f, set) {
+  set = set || preSetOf(f);
+  const x = set && set.ranks && set.ranks[f.rank];
+  if (!x) { f.presetFrom = null; return false; }
+  f.soulRed = x.soulRed; f.soulGold = x.soulGold; f.conds = clone(x.conds || []); f.presetFrom = set.name; f.condsTouched = false;
+  return true;
+}
+/** 最初に用意するセット：ニジイロ2020〜2026（超人は近年の形式「可15未満／不可4未満／連打数 曲別」を入力済み） */
+function seedNijiiroPreset() {
+  return { id: 'p_' + rand(10), name: 'ニジイロ2020〜2026', versions: ['ニジイロ2020', 'ニジイロ2021', 'ニジイロ2022', 'ニジイロ2023', 'ニジイロ2024', 'ニジイロ2025', 'ニジイロ2026'],
+    ranks: { 17: { soulRed: 100, soulGold: 100, conds: [
+      { type: 'ok', scope: 'total', op: 'lt', red: 15, gold: 6 },
+      { type: 'bad', scope: 'total', op: 'lt', red: 4, gold: 2 },
+      { type: 'roll', scope: 'per', op: 'ge', red: [null, null, null], gold: [null, null, null] }] } } };
+}
+async function savePresetSet(set, msg) {
+  try {
+    const res = await api('adminSaveDanPreset', { adminKey, preset: set });
+    D.danPresets = (D.danPresets || []).filter(p => p.id !== res.preset.id);
+    if (!res.preset.deleted) D.danPresets.push(res.preset);
+    toast(msg || 'プリセットを保存しました'); return true;
+  } catch (e) { alert(e.message); return false; }
+}
 
 function viewDanData() {
   if (!D.dans) { $('#tabBody').innerHTML = `<div class="card muted">サーバーが段位道場に対応していません。Code.gs を v2.6 以降に更新してください。</div>`; return; }
   $('#tabBody').innerHTML = `<div class="row" style="margin-bottom:10px">
       <button class="btn small${dst.sub === 'dans' ? '' : ' sub'}" data-dsub="dans">お題（${adDans().length}）</button>
-      <button class="btn small${dst.sub === 'recs' ? '' : ' sub'}" data-dsub="recs">挑戦記録（${(D.danRecords || []).filter(r => !r.deleted).length}）</button></div>
+      <button class="btn small${dst.sub === 'recs' ? '' : ' sub'}" data-dsub="recs">挑戦記録（${(D.danRecords || []).filter(r => !r.deleted).length}）</button>
+      <button class="btn small${dst.sub === 'presets' ? '' : ' sub'}" data-dsub="presets">条件プリセット（${adPresets().length}）</button></div>
     <div id="danBody"></div>`;
   document.querySelectorAll('[data-dsub]').forEach(b => b.onclick = () => { dst.sub = b.dataset.dsub; dst.form = null; render(); });
   if (dst.sub === 'recs') return viewDanRecs();
   if (dst.form) return viewDanFormAdmin();
+  if (dst.sub === 'presets') return viewDanPresets();
   viewDanDefs();
 }
 
@@ -52,10 +88,61 @@ function viewDanDefs() {
     dst.ver = v; dst.form = blankDanForm(v, 0); render();
   };
   document.querySelectorAll('[data-dnew]').forEach(b => b.onclick = () => { dst.form = blankDanForm(ver, +b.dataset.dnew); render(); });
-  document.querySelectorAll('[data-dedit]').forEach(b => b.onclick = () => { const d = adDanById(b.dataset.dedit); dst.form = JSON.parse(JSON.stringify(d)); dst.form.isNew = false; render(); });
+  document.querySelectorAll('[data-dedit]').forEach(b => b.onclick = () => { const d = adDanById(b.dataset.dedit); dst.form = clone(d); dst.form.kind = 'dan'; dst.form.isNew = false; dst.form.condsTouched = true; render(); });
 }
 function blankDanForm(version, rank) {
-  return { id: newDanId(), isNew: true, version, rank, chartIds: ['', '', ''], soulRed: 100, soulGold: 100, conds: [], videoUrl: '', note: '' };
+  const f = { kind: 'dan', id: newDanId(), isNew: true, version, rank, chartIds: ['', '', ''], soulRed: 100, soulGold: 100, conds: [], videoUrl: '', note: '', condsTouched: false };
+  applyPreset(f);
+  return f;
+}
+
+/* ----- 条件プリセットの一覧 ----- */
+function viewDanPresets() {
+  const sets = adPresets();
+  const summary = x => !x ? '<span class="muted">未設定</span>' :
+    (x.soulRed != null ? `<div>魂ゲージ ${x.soulRed}%以上</div>` : '') + (x.conds || []).map(c => {
+      const v = lv => { const a = c[lv]; return Array.isArray(a) ? a.map(n => n == null ? '□' : n).join('/') : a == null ? '□' : a; };
+      return `<div>${DAN_COND[c.type]} ${v('red')}${DAN_OP[c.op]}（${c.scope === 'per' ? '曲別' : '3曲合計'}）<span class="gold-t">　金 ${v('gold')}</span></div>`; }).join('');
+  $('#danBody').innerHTML = `<div class="card"><div class="row between"><h2 style="margin:0">条件プリセット</h2>
+      <button class="btn small" id="psNew">＋ セットを追加</button></div>
+    <div class="muted" style="margin-top:6px">段位ごとの条件の種類・順序・値のひな形です。お題を新しく作るとき、バージョン名が「対象バージョン」に含まれていれば、その段位のプリセットが最初から入力されます（入力後は自由に変更できます）。□は空欄（お題を作るときに入力）です。</div>
+    ${sets.length ? '' : `<button class="btn sub" id="psSeed" style="margin-top:10px">「ニジイロ2020〜2026」のセットを作る（超人の条件を入力済み）</button>`}</div>
+  ${sets.map(set => `<div class="card"><div class="row between"><h2 style="margin:0">${esc(set.name)}</h2>
+      <div class="row"><button class="btn sub small" data-psedit="${esc(set.id)}">名前・対象バージョンを変更</button><button class="btn sub small danger" data-psdel="${esc(set.id)}">セットを削除</button></div></div>
+    <div class="muted" style="margin:4px 0 8px">対象バージョン：${(set.versions || []).map(esc).join('、') || '（なし）'}</div>
+    <div class="tblwrap"><table class="rank"><tr><th>段位</th><th>条件（合格／金合格）</th><th></th></tr>
+      ${DAN_NAMES.map((_, r) => { const x = set.ranks && set.ranks[r]; return `<tr><td>${danPlate(r)}</td><td style="font-size:12px">${summary(x)}</td>
+        <td><button class="btn sub small" data-psrank="${esc(set.id)}" data-rank="${r}">${x ? '編集' : '設定'}</button></td></tr>`; }).join('')}
+    </table></div></div>`).join('')}`;
+  const editSet = set => {
+    const m = showModal(`<h2>${set.name ? 'セットを変更' : 'セットを追加'}</h2>
+      <label>セットの名前</label><input id="psName" value="${esc(set.name || '')}" placeholder="例：ニジイロ2020〜2026">
+      <label>対象バージョン（1行に1つ。お題のバージョン名と同じ書き方で）</label>
+      <textarea id="psVers" style="min-height:140px" placeholder="ニジイロ2025&#10;ニジイロ2026">${esc((set.versions || []).join('\n'))}</textarea>
+      <button class="btn" id="psOk">保存</button>`);
+    m.querySelector('#psOk').onclick = async () => {
+      const name = m.querySelector('#psName').value.trim();
+      const versions = m.querySelector('#psVers').value.split(/[\n,、]/).map(v => v.trim()).filter(Boolean);
+      if (!name) { alert('セットの名前を入力してください。'); return; }
+      const dup = versions.find(v => adPresets().some(p => p.id !== set.id && (p.versions || []).includes(v)));
+      if (dup && !confirm(`「${dup}」は別のセットの対象にも入っています。お題を作るときは先に見つかったセットが使われます。このまま保存しますか？`)) return;
+      if (await savePresetSet({ ...set, name, versions })) { m.remove(); render(); }
+    };
+  };
+  $('#psNew').onclick = () => editSet({ id: 'p_' + rand(10), name: '', versions: [], ranks: {} });
+  if ($('#psSeed')) $('#psSeed').onclick = async () => { if (await savePresetSet(seedNijiiroPreset(), 'セットを作りました')) render(); };
+  document.querySelectorAll('[data-psedit]').forEach(b => b.onclick = () => editSet(clone(adPresets().find(p => p.id === b.dataset.psedit))));
+  document.querySelectorAll('[data-psdel]').forEach(b => b.onclick = async () => {
+    const set = adPresets().find(p => p.id === b.dataset.psdel);
+    if (!confirm(`プリセットのセット「${set.name}」を削除しますか？（登録済みのお題には影響しません）`)) return;
+    if (await savePresetSet({ ...set, deleted: true }, '削除しました')) render();
+  });
+  document.querySelectorAll('[data-psrank]').forEach(b => b.onclick = () => {
+    const set = adPresets().find(p => p.id === b.dataset.psrank), rank = +b.dataset.rank, x = set.ranks && set.ranks[rank];
+    dst.form = { kind: 'preset', setId: set.id, setName: set.name, rank, isNew: !x, chartIds: ['', '', ''],
+      soulRed: x ? x.soulRed : 100, soulGold: x ? x.soulGold : 100, conds: x ? clone(x.conds || []) : [] };
+    render();
+  });
 }
 
 /* ----- お題の編集 ----- */
@@ -77,8 +164,14 @@ function viewDanFormAdmin() {
       <label>合格${per ? '（1曲目／2曲目／3曲目）' : ''}</label><div class="grid${per ? '3' : '1'}">${vals('red')}</div>
       <label class="gold-t">金合格${per ? '（1曲目／2曲目／3曲目）' : ''}（空欄なら合格と同じ）</label><div class="grid${per ? '3' : '1'}">${vals('gold')}</div></div>`;
   };
-  $('#danBody').innerHTML = `<button class="btn sub small" id="dfBack">‹ お題の一覧</button>
-  <div class="card" style="margin-top:10px"><h2>${f.isNew ? 'お題を登録' : 'お題を編集'}</h2>
+  const isPreset = f.kind === 'preset';
+  const sets = isPreset ? [] : adPresets(), set = isPreset ? null : preSetOf(f);
+  const prePanel = sets.length ? `<div class="prepanel"><span class="muted">プリセット</span>
+      <select id="dfPreSet" aria-label="読み込むプリセット">${sets.map(p => `<option value="${esc(p.id)}"${set && p.id === set.id ? ' selected' : ''}>${esc(p.name)}${p.ranks && p.ranks[f.rank] ? '' : '（この段位は未設定）'}</option>`).join('')}</select>
+      <button type="button" class="btn sub small" id="dfPreLoad">読み込む</button></div>` : '';
+  $('#danBody').innerHTML = `<button class="btn sub small" id="dfBack">‹ ${isPreset ? '条件プリセット' : 'お題の一覧'}</button>
+  <div class="card" style="margin-top:10px">${isPreset ? `<h2>条件プリセット：${esc(f.setName)}</h2>
+    <div class="row" style="gap:10px">${danPlate(f.rank)}<span class="muted">値は空欄のままでも保存できます（お題を作るときに入力）</span></div>` : `<div class="row between" style="gap:8px"><h2 style="margin:0">${f.isNew ? 'お題を登録' : 'お題を編集'}</h2>${prePanel}</div>
     <div class="grid2">
       <div><label>バージョン</label><input id="dfVer" value="${esc(f.version)}" list="dverList"><datalist id="dverList">${adVersions().map(v => `<option value="${esc(v)}">`).join('')}</datalist></div>
       <div><label>段位</label><select id="dfRank">${DAN_NAMES.map((n, r) => `<option value="${r}"${f.rank === r ? ' selected' : ''}>${n}</option>`).join('')}</select></div></div>
@@ -88,42 +181,78 @@ function viewDanFormAdmin() {
       <button type="button" class="pickbtn" data-pick="${i}">${s ? `${cicon(s.course)}<span class="nm">${esc(s.title)}</span><span class="muted">${esc(cname(s))}・★${s.level}・${dn(s.maxCombo)}</span>`
         : '<span class="muted">🔍 曲を検索して選ぶ</span>'}</button>
       ${s ? `<button type="button" class="btn sub small" data-unpick="${i}" aria-label="${i + 1}曲目を外す">×</button>` : ''}</div>
-      <div class="muted" id="dfc${i}" style="margin:2px 0 0 4.2em;font-size:12px"></div>`; }).join('')}
+      <div class="muted" id="dfc${i}" style="margin:2px 0 0 4.2em;font-size:12px"></div>`; }).join('')}`}
     <div class="grid2">
       <div><label>魂ゲージ（合格・%以上。条件なしは空欄）</label><input id="dfSoulR" type="number" min="0" max="100" value="${f.soulRed ?? ''}"></div>
       <div><label class="gold-t">魂ゲージ（金合格・%以上）</label><input id="dfSoulG" type="number" min="0" max="100" value="${f.soulGold ?? ''}"></div></div>
     <h3>そのほかの条件（最大3つ）</h3>
+    ${!isPreset && f.presetFrom ? `<div class="hint" style="margin-bottom:6px">プリセット「${esc(f.presetFrom)}」の${esc(DAN_NAMES[f.rank])}の条件を入力してあります。自由に変更できます。</div>` : ''}
     <div id="dfConds">${f.conds.map(condRow).join('')}</div>
-    ${f.conds.length < 3 ? '<button type="button" class="btn sub small" id="dfAddCond">＋ 条件を追加</button>' : ''}
-    <label>お手本動画のURL（任意・https://〜）</label><input id="dfVideo" value="${esc(f.videoUrl || '')}" placeholder="https://www.youtube.com/watch?v=…">
-    <label>メモ（任意・プレイヤーの段位ページに表示）</label><input id="dfNote" maxlength="300" value="${esc(f.note || '')}">
+    <div class="row">${f.conds.length < 3 ? '<button type="button" class="btn sub small" id="dfAddCond">＋ 条件を追加</button>' : ''}
+      ${!isPreset && set ? `<button type="button" class="btn sub small" id="dfToPre">この条件をプリセット「${esc(set.name)}」に保存</button>` : ''}</div>
+    ${isPreset ? '' : `<label>お手本動画のURL（任意・https://〜）</label><input id="dfVideo" value="${esc(f.videoUrl || '')}" placeholder="https://www.youtube.com/watch?v=…">
+    <label>メモ（任意・プレイヤーの段位ページに表示）</label><input id="dfNote" maxlength="300" value="${esc(f.note || '')}">`}
     <div class="row" style="justify-content:flex-end;margin-top:12px">
-      ${f.isNew ? '' : '<button class="btn sub small danger" id="dfDel">お題を削除</button>'}<button class="btn small" id="dfSave">保存</button></div>
+      ${isPreset ? (f.isNew ? '' : '<button class="btn sub small danger" id="dfDel">この段位のプリセットを消す</button>') : f.isNew ? '' : '<button class="btn sub small danger" id="dfDel">お題を削除</button>'}<button class="btn small" id="dfSave">保存</button></div>
   </div>
   <div class="card"><h2>プレイヤー画面での見え方</h2><div id="dfPrev"></div></div>`;
   const style = document.createElement('style');
   style.textContent = '.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.grid1{display:grid;grid-template-columns:1fr}' +
     '.pickrow{display:flex;align-items:center;gap:8px;margin-top:6px}.pickrow .no{width:3.6em;flex-shrink:0}' +
     '.pickbtn{flex:1;min-width:0;display:flex;align-items:center;gap:8px;text-align:left;font:inherit;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px;cursor:pointer}' +
-    '.pickbtn .nm{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pickbtn .muted{font-size:12px;white-space:nowrap;margin-left:auto}';
+    '.pickbtn .nm{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pickbtn .muted{font-size:12px;white-space:nowrap;margin-left:auto}' +
+    '.prepanel{display:flex;align-items:center;gap:6px;background:var(--soft);border-radius:10px;padding:4px 6px 4px 10px;flex-wrap:wrap}.prepanel select{width:auto;max-width:16em;padding:5px 8px}';
   $('#danBody').appendChild(style);
   const sync = () => {
-    f.version = $('#dfVer').value.trim(); f.rank = +$('#dfRank').value;
-    [0, 1, 2].forEach(i => {
-      const s = adGetSong(f.chartIds[i]);
-      $('#dfc' + i).innerHTML = s && !s.shoko ? '<span class="ng-t">初項が未登録です（プレイヤーはスコアを手入力することになります）</span>' : '';
-    });
+    if (!isPreset) {
+      f.version = $('#dfVer').value.trim(); f.rank = +$('#dfRank').value;
+      [0, 1, 2].forEach(i => {
+        const s = adGetSong(f.chartIds[i]);
+        $('#dfc' + i).innerHTML = s && !s.shoko ? '<span class="ng-t">初項が未登録です（プレイヤーはスコアを手入力することになります）</span>' : '';
+      });
+      f.videoUrl = $('#dfVideo').value.trim(); f.note = $('#dfNote').value;
+    }
     f.soulRed = nn($('#dfSoulR').value); f.soulGold = nn($('#dfSoulG').value);
-    f.videoUrl = $('#dfVideo').value.trim(); f.note = $('#dfNote').value;
     document.querySelectorAll('[data-cv]').forEach(el => {
       const c = f.conds[+el.dataset.cv], lv = el.dataset.lv, v = nn(el.value);
+      if (!c) return; // 画面を作り直す直前の古い入力欄
       if (c.scope === 'per') { c[lv] = Array.isArray(c[lv]) ? c[lv] : [null, null, null]; c[lv][+el.dataset.j] = v; } else c[lv] = v;
     });
     const prev = { ...f, conds: f.conds.map(c => ({ ...c, gold: c.scope === 'per' ? (Array.isArray(c.gold) && c.gold.some(x => x != null) ? c.gold : c.red) : (c.gold ?? c.red) })) };
-    $('#dfPrev').innerHTML = `<div class="dcard ${danClass(f.rank)}"><div class="dtop">${danPlate(f.rank)}<span class="ver">${esc(f.version)}</span></div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">${danBodyHtml(prev, adCharts(prev), 'red')}${danBodyHtml(prev, adCharts(prev), 'gold')}</div></div>`;
+    $('#dfPrev').innerHTML = `<div class="dcard ${danClass(f.rank)}"><div class="dtop">${danPlate(f.rank)}<span class="ver">${esc(isPreset ? f.setName : f.version)}</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px">${danBodyHtml(prev, adCharts(prev), 'red', { noTracks: isPreset })}${danBodyHtml(prev, adCharts(prev), 'gold', { noTracks: isPreset })}</div></div>`;
   };
-  document.querySelectorAll('#danBody input, #danBody select').forEach(el => { el.addEventListener('input', sync); el.addEventListener('change', sync); });
+  // 条件を手で変えたら、以後はバージョンや段位を変えてもプリセットで上書きしない
+  const touch = () => { f.condsTouched = true; };
+  document.querySelectorAll('#danBody input, #danBody select').forEach(el => {
+    el.addEventListener('input', sync); el.addEventListener('change', sync);
+    if (el.matches('[data-cv], #dfSoulR, #dfSoulG, [data-ct], [data-cs], [data-co]')) el.addEventListener('input', touch);
+  });
+  // 新しいお題：条件をまだ変えていなければ、バージョン・段位に合わせてプリセットを入れ直す
+  if (!isPreset && f.isNew) ['#dfVer', '#dfRank'].forEach(sel => $(sel).addEventListener('change', () => {
+    sync();
+    if (f.condsTouched) return;
+    if (!applyPreset(f)) { f.soulRed = 100; f.soulGold = 100; f.conds = []; } // プリセットのない段位なら空の状態に戻す
+    viewDanFormAdmin();
+  }));
+  if ($('#dfPreSet')) $('#dfPreSet').onchange = e => { sync(); f.preSetId = e.target.value; f.preSetManual = true; viewDanFormAdmin(); };
+  if ($('#dfPreLoad')) $('#dfPreLoad').onclick = () => {
+    sync();
+    const ps = adPresets().find(p => p.id === $('#dfPreSet').value), x = ps && ps.ranks && ps.ranks[f.rank];
+    if (!x) { alert(`プリセット「${ps ? ps.name : ''}」には${DAN_NAMES[f.rank]}の条件が設定されていません。\n「条件プリセット」タブで設定するか、別のプリセットを選んでください。`); return; }
+    if ((f.conds.length || f.condsTouched) && !confirm(`いまの魂ゲージと条件を、プリセット「${ps.name}」の${DAN_NAMES[f.rank]}の内容に置き換えますか？`)) return;
+    f.preSetId = ps.id; f.preSetManual = true;
+    applyPreset(f, ps); viewDanFormAdmin();
+  };
+  if ($('#dfToPre')) $('#dfToPre').onclick = async () => {
+    sync();
+    const target = preSetOf(f); if (!target) return;
+    const has = target.ranks && target.ranks[f.rank];
+    if (!confirm(`この魂ゲージと条件を、プリセット「${target.name}」の${DAN_NAMES[f.rank]}として${has ? '上書き' : '保存'}しますか？\n（値もそのまま保存されます。あとで「条件プリセット」から空欄にもできます）`)) return;
+    const next = clone(target); next.ranks = next.ranks || {};
+    next.ranks[f.rank] = { soulRed: f.soulRed, soulGold: f.soulGold, conds: clone(f.conds) };
+    if (await savePresetSet(next, `プリセット「${target.name}」に保存しました`)) viewDanFormAdmin();
+  };
   document.querySelectorAll('[data-ct]').forEach(el => el.onchange = () => { f.conds[+el.dataset.ct].type = el.value; sync(); });
   document.querySelectorAll('[data-co]').forEach(el => el.onchange = () => { f.conds[+el.dataset.co].op = el.value; sync(); });
   document.querySelectorAll('[data-cs]').forEach(el => el.onchange = () => {
@@ -132,16 +261,28 @@ function viewDanFormAdmin() {
     c.red = c.scope === 'per' ? three(c.red) : one(c.red); c.gold = c.scope === 'per' ? three(c.gold) : one(c.gold);
     viewDanFormAdmin();
   });
-  document.querySelectorAll('[data-cdel]').forEach(b => b.onclick = () => { sync(); f.conds.splice(+b.dataset.cdel, 1); viewDanFormAdmin(); });
-  const move = (i, j) => { sync(); const c = f.conds; [c[i], c[j]] = [c[j], c[i]]; viewDanFormAdmin(); };
+  document.querySelectorAll('[data-cdel]').forEach(b => b.onclick = () => { sync(); touch(); f.conds.splice(+b.dataset.cdel, 1); viewDanFormAdmin(); });
+  const move = (i, j) => { sync(); touch(); const c = f.conds; [c[i], c[j]] = [c[j], c[i]]; viewDanFormAdmin(); };
   document.querySelectorAll('[data-cup]').forEach(b => b.onclick = () => move(+b.dataset.cup, +b.dataset.cup - 1));
   document.querySelectorAll('[data-cdown]').forEach(b => b.onclick = () => move(+b.dataset.cdown, +b.dataset.cdown + 1));
   document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { sync(); pickChart(f.chartIds[+b.dataset.pick], id => { f.chartIds[+b.dataset.pick] = id; viewDanFormAdmin(); }); });
   document.querySelectorAll('[data-unpick]').forEach(b => b.onclick = () => { sync(); f.chartIds[+b.dataset.unpick] = ''; viewDanFormAdmin(); });
-  if ($('#dfAddCond')) $('#dfAddCond').onclick = () => { sync(); f.conds.push({ type: 'ok', scope: 'total', op: 'lt', red: null, gold: null }); viewDanFormAdmin(); };
+  if ($('#dfAddCond')) $('#dfAddCond').onclick = () => { sync(); touch(); f.conds.push({ type: 'ok', scope: 'total', op: 'lt', red: null, gold: null }); viewDanFormAdmin(); };
   $('#dfBack').onclick = () => { dst.form = null; render(); };
-  $('#dfSave').onclick = () => saveDanDef(false);
-  if ($('#dfDel')) $('#dfDel').onclick = () => { if (confirm('このお題を削除しますか？（挑戦記録は残りますが、プレイヤー画面には表示されなくなります）')) saveDanDef(true); };
+  if (isPreset) {
+    const savePre = async del => {
+      sync();
+      const cur = adPresets().find(p => p.id === f.setId); if (!cur) { alert('セットが見つかりません。'); return; }
+      const next = clone(cur); next.ranks = next.ranks || {};
+      if (del) delete next.ranks[f.rank]; else next.ranks[f.rank] = { soulRed: f.soulRed, soulGold: f.soulGold, conds: clone(f.conds) };
+      if (await savePresetSet(next, del ? 'この段位のプリセットを消しました' : 'プリセットを保存しました')) { dst.form = null; render(); }
+    };
+    $('#dfSave').onclick = () => savePre(false);
+    if ($('#dfDel')) $('#dfDel').onclick = () => { if (confirm(`${DAN_NAMES[f.rank]}のプリセットを消しますか？`)) savePre(true); };
+  } else {
+    $('#dfSave').onclick = () => saveDanDef(false);
+    if ($('#dfDel')) $('#dfDel').onclick = () => { if (confirm('このお題を削除しますか？（挑戦記録は残りますが、プレイヤー画面には表示されなくなります）')) saveDanDef(true); };
+  }
   sync();
 }
 /* ----- 課題曲を検索して選ぶ ----- */
