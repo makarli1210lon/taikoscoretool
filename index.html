@@ -473,6 +473,7 @@ function afterSync() {
   refreshChrome();
   if (state.view === 'input') { renderInputExtras(); if (!state.pick.title) renderPickList(); else renderPicker(); updateInput(); }
   else if (state.view === 'dan' && danEditing()) { /* 段位の挑戦を入力中は描き直さない（入力が消えないように） */ }
+  else if (state.view === 'songs' && state.songForm) { /* 楽曲の追加・編集中も同じ */ }
   else if (!(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) render();
 }
 
@@ -1255,6 +1256,7 @@ function songFormHtml(f) {
       <button class="btn sub danger" id="gDel">この曲を難易度ごとすべて削除</button>
       <button class="btn sub" id="fCancel">キャンセル</button></div>`;
   }
+  if (f.mode === 'newSong' || f.mode === 'addChart') return songMultiFormHtml(f);
   const ed = f.mode === 'editChart' ? getSong(f.id) : null;
   const g = f.title ? gm.get(f.title) : null;
   const used = new Set(g ? g.charts.filter(c => !ed || c.id !== ed.id).map(c => c.course) : []);
@@ -1289,6 +1291,70 @@ function songFormHtml(f) {
     ${ed ? '<button class="btn sub danger" id="sDel">この難易度を削除</button>' : ''}
     <button class="btn sub" id="fCancel">キャンセル</button></div>`;
 }
+/** 新しい楽曲／難易度の追加：コースをタブで切り替えて、複数のコースを一度に登録する */
+function songMultiFormHtml(f) {
+  const g = f.mode === 'addChart' ? groupMap().get(f.title) : null;
+  f.v = f.v || {};
+  if (!f.mc) f.mc = mcNew(g ? g.charts : [], f.course);
+  const v = k => esc(f.v[k] || '');
+  const head = f.mode === 'newSong'
+    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off" value="${v('title')}"><div class="muted" id="sTitleNote" style="font-size:12px"></div>
+       <label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off" value="${v('genre')}">${genreList()}
+       <div class="grid2"><div><label>作曲者（任意）</label><input id="sComposer" maxlength="60" value="${v('composer')}" autocomplete="off"></div>
+         <div><label>アーケード追加日（任意）</label><input id="sAdded" type="date" value="${v('added')}"></div></div>`
+    : `<div class="picked"${gcStyle(g && g.genre)}><div><strong>${esc(f.title)}</strong>${genreTag(g && g.genre)}</div></div>`;
+  return `<div class="card"><h2>${f.mode === 'newSong' ? '新しい楽曲を追加' : '難易度を追加'}</h2>
+    ${head}
+    <label style="margin-top:12px">コース（タブで切り替えて、登録するコースの★を選んでください）</label>
+    <div id="mcBox">${mcHtml(f.mc)}</div>
+    <div class="muted" style="margin-top:6px">初項を登録した難易度だけ、スコアを自動計算します。攻略・動画リンクは管理者が設定します。</div>
+    <button class="btn" id="sSave">追加する</button>
+    <button class="btn sub" id="fCancel">キャンセル</button></div>`;
+}
+function bindSongMultiForm(f) {
+  const upd = () => {
+    const n = mcCollect(f.mc).list.length;
+    $('#sSave').textContent = n ? `${n}譜面を追加する` : '追加する';
+    $('#sSave').disabled = !n;
+  };
+  mcBind(f.mc, $('#mcBox'), upd); upd();
+  if (f.mode === 'newSong') {
+    // 入力した曲名・ジャンルなどを控えておく（画面が描き直されても消えない）
+    [['#sTitle', 'title'], ['#sGenre', 'genre'], ['#sComposer', 'composer'], ['#sAdded', 'added']].forEach(([sel, k]) => { $(sel).addEventListener('input', e => { f.v[k] = e.target.value; }); });
+    // すでにある曲名なら、その曲の登録済みコースをタブに表示する
+    const check = () => {
+      const g = groupMap().get(($('#sTitle').value || '').trim());
+      mcSetExisting(f.mc, g ? g.charts : []);
+      $('#sTitleNote').innerHTML = g ? `「${esc(g.title)}」は登録済みの曲です。登録済みでないコースだけを追加します。` : '';
+      $('#mcBox').innerHTML = mcHtml(f.mc); mcBind(f.mc, $('#mcBox'), upd); upd();
+    };
+    $('#sTitle').addEventListener('change', check);
+    if (f.v.title) check();
+  }
+  $('#sSave').onclick = () => saveMultiCharts(f);
+}
+function saveMultiCharts(f) {
+  let title, genre, info;
+  if (f.mode === 'newSong') {
+    title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim(); info = readInfo();
+    if (!title) { alert('楽曲名を入力してください。'); return; }
+    const g = groupMap().get(title);
+    if (g) { genre = g.genre || genre; info = { composer: g.composer || info.composer, addedDate: g.addedDate || info.addedDate }; mcSetExisting(f.mc, g.charts); }
+  } else {
+    title = f.title; const g = groupMap().get(title);
+    genre = (g && g.genre) || ''; info = { composer: (g && g.composer) || '', addedDate: (g && g.addedDate) || '' };
+  }
+  const { list, warn } = mcCollect(f.mc);
+  if (!list.length) { alert('登録するコースの★を選んでください。'); return; }
+  const dup = list.find(x => activeSongs().some(s => s.title === title && s.course === x.course));
+  if (dup) { alert(`「${title}」には${COURSES[dup.course]}がすでに登録されています。`); return; }
+  if (warn.length && !confirm(warn.join('\n') + '\nこのまま保存しますか？')) return;
+  if (list.length > 1 && !confirm(`「${title}」に次の${list.length}譜面を追加します。\n${mcSummary(list)}`)) return;
+  const now = isoLocal();
+  list.forEach(x => db.songs.push({ id: newSongId(), title, genre, ...info, course: x.course, level: x.level, subLevel: x.subLevel, maxCombo: x.maxCombo, shoko: x.shoko,
+    updatedAt: now, wikiUrl: '', videoUrl: '', createdBy: me(), createdAt: now, deleted: false, _sv: null }));
+  save(); toast(`${list.length}譜面を追加しました`); closeForm(title); scheduleSync();
+}
 /** 曲単位の任意項目（作曲者・アーケード追加日） */
 function songInfoFields(g) {
   return `<div class="grid2">
@@ -1299,6 +1365,7 @@ const readInfo = () => ({ composer: $('#sComposer').value.trim().slice(0, 60), a
 function closeForm(title) { state.songForm = null; state.detail = title && groupMap().has(title) ? title : null; render(); window.scrollTo(0, 0); }
 function bindSongForm(f) {
   $('#fCancel').onclick = () => closeForm(f.mode === 'newSong' ? null : f.title);
+  if (f.mode === 'newSong' || f.mode === 'addChart') return bindSongMultiForm(f);
   if (f.mode === 'editGroup') { $('#gSave').onclick = () => saveGroup(f); $('#gDel').onclick = () => delGroup(f.title); return; }
   const toggle = () => {
     const lv = Number($('#sLevel').value), t = $('#sTier').value;

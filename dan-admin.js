@@ -190,7 +190,7 @@ function viewDanFormAdmin() {
     <div id="dfConds">${f.conds.map(condRow).join('')}</div>
     <div class="row">${f.conds.length < 3 ? '<button type="button" class="btn sub small" id="dfAddCond">＋ 条件を追加</button>' : ''}
       ${!isPreset && set ? `<button type="button" class="btn sub small" id="dfToPre">この条件をプリセット「${esc(set.name)}」に保存</button>` : ''}</div>
-    ${isPreset ? '' : `<label>お手本動画のURL（任意・https://〜）</label><input id="dfVideo" value="${esc(f.videoUrl || '')}" placeholder="https://www.youtube.com/watch?v=…">
+    ${isPreset ? '' : `${urlField('dfVideo', 'お手本動画のURL（任意・https://〜）', f.videoUrl, 'https://www.youtube.com/watch?v=…')}
     <label>メモ（任意・プレイヤーの段位ページに表示）</label><input id="dfNote" maxlength="300" value="${esc(f.note || '')}">`}
     <div class="row" style="justify-content:flex-end;margin-top:12px">
       ${isPreset ? (f.isNew ? '' : '<button class="btn sub small danger" id="dfDel">この段位のプリセットを消す</button>') : f.isNew ? '' : '<button class="btn sub small danger" id="dfDel">お題を削除</button>'}<button class="btn small" id="dfSave">保存</button></div>
@@ -268,6 +268,7 @@ function viewDanFormAdmin() {
   document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { sync(); pickChart(f.chartIds[+b.dataset.pick], id => { f.chartIds[+b.dataset.pick] = id; viewDanFormAdmin(); }); });
   document.querySelectorAll('[data-unpick]').forEach(b => b.onclick = () => { sync(); f.chartIds[+b.dataset.unpick] = ''; viewDanFormAdmin(); });
   if ($('#dfAddCond')) $('#dfAddCond').onclick = () => { sync(); touch(); f.conds.push({ type: 'ok', scope: 'total', op: 'lt', red: null, gold: null }); viewDanFormAdmin(); };
+  bindUrlFields($('#danBody'));
   $('#dfBack').onclick = () => { dst.form = null; render(); };
   if (isPreset) {
     const savePre = async del => {

@@ -338,3 +338,122 @@ function download(name, data, type) {
   const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
 }
+
+/* ===================== 複数コースをまとめて入力するタブ（楽曲の追加） =====================
+   楽曲一覧と同じコースボタンをタブとして並べ、コースごとに★・細分・最大コンボ・初項（管理者はリンクも）を入れる。
+   ★を選んだコースだけを登録する。登録済みのコースは「登録済み」として表示だけする。
+   st = { tab, data: { course: { level, tier, tag, maxCombo, shoko, wikiUrl, videoUrl } }, existing: { course: 譜面 }, links } */
+function mcNew(existingCharts, firstCourse, opts) {
+  const st = { tab: null, data: {}, existing: {}, links: !!(opts && opts.links) };
+  mcSetExisting(st, existingCharts);
+  st.tab = firstCourse && !st.existing[firstCourse] ? firstCourse : (COURSE_ORDER.find(c => c === 'oni' && !st.existing[c]) || COURSE_ORDER.find(c => !st.existing[c]) || 'oni');
+  return st;
+}
+function mcSetExisting(st, charts) {
+  st.existing = {};
+  (charts || []).forEach(c => { if (!c.deleted) st.existing[c.course] = c; });
+}
+const mcFilled = d => !!(d && d.level);
+function mcTabLabel(st, c) {
+  const ex = st.existing[c], d = st.data[c];
+  if (ex) return "登録済";
+  if (mcFilled(d)) return `★${d.level}${+d.level === 10 && d.tier ? ' ' + d.tier : ''}`;
+  return '未入力';
+}
+function mcTabsHtml(st) {
+  return `<div class="courses mctabs" style="--n:5" role="tablist">${COURSE_ORDER.map(c => {
+    const ex = st.existing[c], on = mcFilled(st.data[c]);
+    return `<button type="button" role="tab" aria-selected="${st.tab === c}" class="cbtn mct cc-${c}${st.tab === c ? ' sel' : ''}${ex ? ' done' : on ? ' filled' : ''}" data-mct="${c}">
+      <i class="cicon cc-${c}${ex || on ? '' : ' gray'}" aria-hidden="true">${COURSE_DOT[c]}</i><span>${COURSE_SHORT[c]}</span><small>${esc(mcTabLabel(st, c))}</small></button>`;
+  }).join('')}</div>`;
+}
+function mcPanelHtml(st) {
+  const c = st.tab, ex = st.existing[c], d = st.data[c] || {};
+  if (ex) return `<div class="mcpanel"><div class="muted">${esc(COURSES[c])}は登録済みです（★${ex.level}・${ex.maxCombo ?? '---'}コンボ${ex.shoko ? '・初項' + ex.shoko : ''}）。<br>変更は、楽曲の詳細（またはその難易度のボタン）から行ってください。</div></div>`;
+  const lv = d.level ? +d.level : 0, tag = d.tag || 'jiriki';
+  return `<div class="mcpanel">
+    <label>${esc(COURSES[c])}の難易度</label><select id="mcLevel"><option value="">― 登録しない</option>${[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `<option value="${n}"${n === lv ? ' selected' : ''}>★${n}</option>`).join('')}</select>
+    <div id="mcFields"${lv ? '' : ' class="hidden"'}>
+      <div id="mcSub"${lv === 10 ? '' : ' class="hidden"'}>
+        <label>★10 細分（全良難易度表）</label>
+        <select id="mcTier"><option value="">未分類</option>${TIERS.map(t => `<option value="${t}"${t === d.tier ? ' selected' : ''}>${t}</option>`).join('')}</select>
+        <div id="mcTag" class="seg${lv === 10 && TAGGED.has(d.tier) ? '' : ' hidden'}">
+          <label><input type="radio" name="mcTag" value="jiriki"${tag !== 'kojinsa' ? ' checked' : ''}> 地力</label>
+          <label><input type="radio" name="mcTag" value="kojinsa"${tag === 'kojinsa' ? ' checked' : ''}> 個人差</label></div>
+      </div>
+      <div class="grid2">
+        <div><label>最大コンボ数</label><input id="mcCombo" type="number" inputmode="numeric" min="0" value="${esc(d.maxCombo ?? '')}"></div>
+        <div><label>初項（良1回の点）</label><input id="mcShoko" type="number" inputmode="numeric" min="0" value="${esc(d.shoko ?? '')}" placeholder="不明なら空欄"></div>
+      </div>
+      ${st.links ? urlField('mcWiki', '攻略wikiのURL（任意・https://〜）', d.wikiUrl) + urlField('mcVideo', 'プレイ動画のURL（任意・https://〜）', d.videoUrl) : ''}
+    </div>
+    ${lv ? `<div class="mcbtns"><button type="button" class="btn sub small" id="mcClear">${esc(COURSES[c])}の入力を消す</button></div>` : '<div class="muted" style="margin-top:6px">★を選ぶと、このコースも一緒に登録します。</div>'}
+  </div>`;
+}
+/* ----- URL欄（管理者画面）：「貼り付け」と「開いて確認」のボタン付き ----- */
+function urlField(id, label, value, placeholder) {
+  return `<label for="${id}">${esc(label)}</label><div class="urlf">
+    <input id="${id}" type="url" inputmode="url" value="${esc(value || '')}" autocomplete="off" placeholder="${esc(placeholder || 'https://')}">
+    <button type="button" class="btn sub small" data-paste="${id}" title="コピーしたURLを貼り付け">📋 貼り付け</button>
+    <button type="button" class="btn sub small" data-openurl="${id}" title="新しいタブで開いて確認" aria-label="開いて確認">↗</button></div>`;
+}
+/** 貼り付けた文からURLだけを取り出す（共有した文に曲名などが付いていても、最初の http(s):// 〜 を使う） */
+function pickUrl(text) {
+  const m = String(text || '').match(/https?:\/\/[^\s"'<>（）「」、。]+/);
+  return m ? m[0].replace(/[)\]}.,!?！？]+$/, '') : String(text || '').trim();
+}
+function bindUrlFields(root) {
+  (root || document).querySelectorAll('[data-paste]').forEach(b => b.onclick = async () => {
+    const el = document.getElementById(b.dataset.paste); if (!el) return;
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch (e) { text = ''; }
+    if (!text) { el.focus(); toast('この端末ではボタンから貼り付けできません。欄を長押し（右クリック）して貼り付けてください', 3500); return; }
+    const url = pickUrl(text);
+    if (!/^https:\/\//.test(url)) { toast(/^http:\/\//.test(url) ? 'http:// のURLは使えません（https:// のものを使ってください）' : 'コピーした内容にURLが見つかりませんでした', 3000); return; }
+    el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+    toast('貼り付けました');
+  });
+  (root || document).querySelectorAll('[data-openurl]').forEach(b => b.onclick = () => {
+    const el = document.getElementById(b.dataset.openurl), url = el ? pickUrl(el.value) : '';
+    if (!isHttps(url)) { toast('https:// で始まるURLを入力してください', 2500); return; }
+    window.open(url, '_blank', 'noopener');
+  });
+  // 手で貼り付けた場合も、URL以外の文字が混ざっていたら取り除く
+  (root || document).querySelectorAll('.urlf input').forEach(el => el.addEventListener('paste', () => setTimeout(() => {
+    const u = pickUrl(el.value); if (u !== el.value && /^https?:\/\//.test(u)) { el.value = u; el.dispatchEvent(new Event('input', { bubbles: true })); }
+  }, 0)));
+}
+const mcHtml = st => `<div class="mcwrap">${mcTabsHtml(st)}${mcPanelHtml(st)}</div>`;
+/** box（mcHtmlを入れた要素）にイベントを付ける。入力のたびに st に控えるので、タブを切り替えても消えない */
+function mcBind(st, box, onChange) {
+  const redraw = () => { box.innerHTML = mcHtml(st); mcBind(st, box, onChange); if (onChange) onChange(); };
+  const tabsOnly = () => { box.querySelector('.mctabs').outerHTML = mcTabsHtml(st); box.querySelectorAll('[data-mct]').forEach(bindTab); if (onChange) onChange(); };
+  const bindTab = b => b.onclick = () => { st.tab = b.dataset.mct; redraw(); };
+  box.querySelectorAll('[data-mct]').forEach(bindTab);
+  const c = st.tab; if (st.existing[c]) return;
+  const d = () => (st.data[c] = st.data[c] || {});
+  const q = s => box.querySelector(s);
+  q('#mcLevel').onchange = e => { d().level = e.target.value; if (!d().level) delete st.data[c]; redraw(); };
+  if (q('#mcClear')) q('#mcClear').onclick = () => { delete st.data[c]; redraw(); };
+  if (q('#mcTier')) q('#mcTier').onchange = e => { d().tier = e.target.value; q('#mcTag').classList.toggle('hidden', !TAGGED.has(d().tier)); tabsOnly(); };
+  box.querySelectorAll('input[name=mcTag]').forEach(r => r.onchange = () => { d().tag = r.value; });
+  [['#mcCombo', 'maxCombo'], ['#mcShoko', 'shoko'], ['#mcWiki', 'wikiUrl'], ['#mcVideo', 'videoUrl']].forEach(([sel, k]) => { const el = q(sel); if (el) el.oninput = () => { d()[k] = el.value; }; });
+  if (st.links) bindUrlFields(box);
+}
+/** 登録するコースの一覧と、確認が必要な点 */
+function mcCollect(st) {
+  const list = [], warn = [], errs = [];
+  COURSE_ORDER.forEach(c => {
+    const d = st.data[c];
+    if (st.existing[c] || !mcFilled(d)) return;
+    const level = +d.level, tier = level === 10 ? (d.tier || '') : '';
+    const subLevel = tier ? { tier, tag: tier === 'SS' ? null : tier === 'F' ? 'jiriki' : (d.tag || 'jiriki') } : null;
+    const maxCombo = nn(d.maxCombo), shoko = nn(d.shoko);
+    const wikiUrl = String(d.wikiUrl || '').trim(), videoUrl = String(d.videoUrl || '').trim();
+    if ((wikiUrl && !isHttps(wikiUrl)) || (videoUrl && !isHttps(videoUrl))) errs.push(`${COURSES[c]}：URLは https:// で始まるものを入力してください。`);
+    if (shoko != null && shoko % 10 !== 0) warn.push(`${COURSES[c]}の初項（${shoko}）が10点単位ではありません。`);
+    list.push({ course: c, level, subLevel, maxCombo, shoko, wikiUrl, videoUrl });
+  });
+  return { list, warn, errs };
+}
+const mcSummary = list => list.map(x => `${COURSES[x.course]} ★${x.level}`).join('・');

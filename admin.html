@@ -634,6 +634,7 @@ function songFormHtml(f) {
       <button class="btn" id="gSave">保存</button><button class="btn sub danger" id="gDel">この曲を難易度ごとすべて削除</button>
       <button class="btn sub" id="fCancel">キャンセル</button></div>`;
   }
+  if (f.mode === 'newSong' || f.mode === 'addChart') return songMultiFormHtml(f);
   const ed = f.mode === 'editChart' ? getSong(f.id) : null;
   const g = f.title ? gm.get(f.title) : null;
   const used = new Set(g ? g.charts.filter(c => !ed || c.id !== ed.id).map(c => c.course) : []);
@@ -653,15 +654,68 @@ function songFormHtml(f) {
         <label><input type="radio" name="sTag" value="kojinsa"${tag === 'kojinsa' ? ' checked' : ''}> 個人差</label></div></div>
     <div class="grid2"><div><label>最大コンボ数</label><input id="sCombo" type="number" inputmode="numeric" min="0" value="${sv('maxCombo')}"></div>
       <div><label>初項（良1回の点）</label><input id="sShoko" type="number" inputmode="numeric" min="0" value="${sv('shoko')}" placeholder="不明なら空欄"></div></div>
-    <label>攻略wikiのURL（任意・https://〜）</label><input id="sWiki" type="url" value="${esc(sv('wikiUrl'))}" autocomplete="off" placeholder="https://">
-    <label>プレイ動画のURL（任意・https://〜）</label><input id="sVideo" type="url" value="${esc(sv('videoUrl'))}" autocomplete="off" placeholder="https://">
+    ${urlField('sWiki', '攻略wikiのURL（任意・https://〜）', sv('wikiUrl'))}${urlField('sVideo', 'プレイ動画のURL（任意・https://〜）', sv('videoUrl'))}
     <div class="muted" style="margin-top:6px">プレイヤーの詳細ページには、攻略URLがある場合だけ「攻略」「▶」が表示されます（動画のみでは表示されません）。</div>
     ${ed && ed.createdBy && ed.createdBy !== 'admin' ? `<div class="muted" style="margin-top:6px">👤 ${esc(ed.createdBy)} が追加した譜面です。</div>` : ''}
     <button class="btn" id="sSave">${ed ? '変更を保存' : '追加する'}</button>${ed ? '<button class="btn sub danger" id="sDel">この難易度を削除</button>' : ''}
     <button class="btn sub" id="fCancel">キャンセル</button></div>`;
 }
+/** 新しい楽曲／難易度の追加：コースのタブで複数のコースを一度に登録（リンクもコースごと） */
+function songMultiFormHtml(f) {
+  const g = f.mode === 'addChart' ? groupMap().get(f.title) : null;
+  f.v = f.v || {}; f.newIds = f.newIds || {};
+  if (!f.mc) f.mc = mcNew(g ? g.charts : [], f.course, { links: true });
+  const v = k => esc(f.v[k] || '');
+  const head = f.mode === 'newSong'
+    ? `<label>楽曲名</label><input id="sTitle" autocomplete="off" value="${v('title')}"><div class="muted" id="sTitleNote" style="font-size:12px"></div>
+       <label>ジャンル</label><input id="sGenre" list="genres" autocomplete="off" value="${v('genre')}">${genreList()}
+       <div class="grid2"><div><label>作曲者（任意）</label><input id="sComposer" maxlength="60" value="${v('composer')}" autocomplete="off"></div>
+         <div><label>アーケード追加日（任意）</label><input id="sAdded" type="date" value="${v('added')}"></div></div>`
+    : `<div class="picked"${gcStyle(g && g.genre)}><div><strong>${esc(f.title)}</strong>${genreTag(g && g.genre)}</div></div>`;
+  return `<div class="card" style="max-width:640px"><h2>${f.mode === 'newSong' ? '新しい楽曲を追加' : '難易度を追加'}</h2>${head}
+    <label style="margin-top:12px">コース（タブで切り替えて、登録するコースの★を選んでください）</label>
+    <div id="mcBox">${mcHtml(f.mc)}</div>
+    <div class="muted" style="margin-top:6px">プレイヤーの詳細ページには、攻略URLがある場合だけ「攻略」「▶」が表示されます（動画のみでは表示されません）。</div>
+    <button class="btn" id="sSave">追加する</button><button class="btn sub" id="fCancel">キャンセル</button></div>`;
+}
+function bindSongMultiForm(f) {
+  const upd = () => { const n = mcCollect(f.mc).list.length; $('#sSave').textContent = n ? `${n}譜面を追加する` : '追加する'; $('#sSave').disabled = !n; };
+  mcBind(f.mc, $('#mcBox'), upd); upd();
+  if (f.mode === 'newSong') {
+    [['#sTitle', 'title'], ['#sGenre', 'genre'], ['#sComposer', 'composer'], ['#sAdded', 'added']].forEach(([sel, k]) => { $(sel).addEventListener('input', e => { f.v[k] = e.target.value; }); });
+    const check = () => {
+      const g = groupMap().get(($('#sTitle').value || '').trim());
+      mcSetExisting(f.mc, g ? g.charts : []);
+      $('#sTitleNote').innerHTML = g ? `「${esc(g.title)}」は登録済みの曲です。登録済みでないコースだけを追加します。` : '';
+      $('#mcBox').innerHTML = mcHtml(f.mc); mcBind(f.mc, $('#mcBox'), upd); upd();
+    };
+    $('#sTitle').addEventListener('change', check);
+    if (f.v.title) check();
+  }
+  $('#sSave').onclick = async () => {
+    let title, genre, info;
+    if (f.mode === 'newSong') {
+      title = $('#sTitle').value.trim(); genre = $('#sGenre').value.trim(); info = readInfo();
+      if (!title) { alert('楽曲名を入力してください。'); return; }
+      const g = groupMap().get(title);
+      if (g) { genre = g.genre || genre; info = { composer: g.composer || info.composer, addedDate: g.addedDate || info.addedDate }; mcSetExisting(f.mc, g.charts); }
+    } else { title = f.title; const g = groupMap().get(title); genre = (g && g.genre) || ''; info = { composer: (g && g.composer) || '', addedDate: (g && g.addedDate) || '' }; }
+    const { list, warn, errs } = mcCollect(f.mc);
+    if (errs.length) { alert(errs.join('\n')); return; }
+    if (!list.length) { alert('登録するコースの★を選んでください。'); return; }
+    const dup = list.find(x => D.songs.some(s => !s.deleted && s.title === title && s.course === x.course));
+    if (dup) { alert(`「${title}」には${COURSES[dup.course]}がすでに登録されています。`); return; }
+    if (warn.length && !confirm(warn.join('\n') + '\nこのまま保存しますか？')) return;
+    if (list.length > 1 && !confirm(`「${title}」に次の${list.length}譜面を追加します。\n${mcSummary(list)}`)) return;
+    const now = isoLocal();
+    // IDはコースごとに一度だけ決める（2回送られても同じ譜面の上書きになる）
+    await saveSongs(list.map(x => ({ id: f.newIds[x.course] || (f.newIds[x.course] = newSongId()), createdAt: now, deleted: false,
+      title, genre, ...info, course: x.course, level: x.level, subLevel: x.subLevel, maxCombo: x.maxCombo, shoko: x.shoko, wikiUrl: x.wikiUrl, videoUrl: x.videoUrl, updatedAt: now })));
+  };
+}
 function bindSongForm(f) {
   $('#fCancel').onclick = () => { st.songForm = null; render(); };
+  if (f.mode === 'newSong' || f.mode === 'addChart') return bindSongMultiForm(f);
   if (f.mode === 'editGroup') {
     $('#gSave').onclick = async () => {
       const newT = $('#gTitle').value.trim(), genre = $('#gGenre').value.trim(), info = readInfo();
@@ -680,6 +734,7 @@ function bindSongForm(f) {
     };
     return;
   }
+  bindUrlFields($('#tabBody'));
   const toggle = () => { const lv = Number($('#sLevel').value), t = $('#sTier').value; $('#subWrap').classList.toggle('hidden', lv !== 10); $('#tagWrap').classList.toggle('hidden', !(lv === 10 && TAGGED.has(t))); };
   $('#sLevel').onchange = toggle; $('#sTier').onchange = toggle; toggle();
   $('#sSave').onclick = async () => {

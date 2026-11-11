@@ -397,3 +397,25 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
   .gold-t{color:#f2c14e}.b-dan{color:#b99cff}
 }
 .hint{font-size:12px;background:var(--soft);border-radius:8px;padding:6px 10px;color:var(--text)}
+/* 楽曲の追加：コースのタブ */
+.mctabs{margin-top:12px}
+.mct{gap:1px;padding:6px 2px 5px;border-style:dashed}
+.mct.filled,.mct.done{border-style:solid}
+.mct.done{opacity:.6}
+.mct.sel{border-width:2.5px;border-style:solid;box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--cc);opacity:1}
+.mct .cicon{margin-bottom:1px}
+.mct.filled small{color:var(--cc);font-weight:800}
+.cicon.gray.cc-easy{background-image:url(img/course-easy-gray.svg)}
+.cicon.gray.cc-normal{background-image:url(img/course-normal-gray.svg)}
+.cicon.gray.cc-hard{background-image:url(img/course-hard-gray.svg)}
+.cicon.gray.cc-oni{background-image:url(img/course-oni-gray.svg)}
+.cicon.gray.cc-ura{background-image:url(img/course-ura-gray.svg)}
+html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
+.mcpanel{border:1px solid var(--line);border-radius:10px;padding:10px 12px 12px;margin-top:10px;background:var(--soft)}
+.mcpanel select,.mcpanel input{background:var(--card)}
+.mcbtns{display:flex;justify-content:flex-end;margin-top:10px}
+.urlf{display:flex;gap:6px;align-items:center}
+.urlf input{flex:1;min-width:0}
+.urlf .btn{margin:0;flex-shrink:0;white-space:nowrap}
+.embw.fail{filter:none}
+.embw.empty{display:inline-block;filter:none}
