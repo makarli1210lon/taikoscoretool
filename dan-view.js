@@ -141,6 +141,7 @@ function viewDan() {
   danPrefs();
   cached('oniBoth', () => refreshOniBoth(db.songs));
   const top = danSt.stack[danSt.stack.length - 1];
+  document.querySelector('main').classList.toggle('wide', !!top && (top.t === 'page' || top.t === 'rec'));
   if (top && top.t === 'page') return viewDanPage(top.id);
   if (top && top.t === 'form') return viewDanForm(top.danId, top.id);
   if (top && top.t === 'rec') return viewDanRec(top.id);
@@ -151,6 +152,7 @@ const danBestOf = danId => danBest(myDanRecs(danId));
 
 /* ----- 段位一覧 ----- */
 function viewDanList() {
+  danPrefs();
   const vers = danVersions();
   if (!danSt.ver || !vers.includes(danSt.ver)) danSt.ver = vers[0] || null;
   const ver = danSt.ver;
@@ -166,7 +168,7 @@ function viewDanList() {
   }
   const card = rank => {
     const d = danOf(ver, rank), cls = danClass(rank);
-    if (!d) return `<div class="dcard ${cls} nodef"><div class="dtop">${danPlate(rank)}<span class="ver">${esc(ver)}</span><span class="sp"></span><span class="muted" style="font-size:11px">お題未登録</span></div></div>`;
+    if (!d) return ''; // 本家と同じく、そのバージョンに登録されている段位だけを表示
     const b = danBestOf(d.id), open = danSt.open.has(d.id), mode = danSt.mode[d.id] || 'red';
     return `<div class="dcard ${cls}" data-dcard="${esc(d.id)}"><div class="dtop" data-dtoggle="${esc(d.id)}">${danPlate(rank)}<span class="ver">${esc(ver)}</span><span class="sp"></span>
       ${danEmblem(b && b.result, b && b.frame)}
@@ -266,10 +268,7 @@ function viewDanPage(id) {
     ${charts.map((s, i) => { const b = perSong[i]; return `<div class="tpan t${i + 1}"><div class="tl">${s ? cicon(s.course) : ''}<span class="nm">${esc(s ? s.title : '—')}</span>
       <b class="num">${b ? crownHtml(crownOf(b.t, s)) + ' ' + dn(b.t.score) : '—'}</b></div>
       ${b ? `<div class="muted num" style="margin-top:2px"><span class="j-good">良${b.t.good}</span> <span class="j-ok">可${b.t.ok}</span> <span class="j-bad">不可${b.t.bad}</span> <span class="j-roll">連打${b.t.roll}</span></div>` : '<div class="muted">まだ演奏していません</div>'}</div>`; }).join('')}
-    ${condBest.length ? `<h3>条件ごとの段位内ベスト</h3>` + condBest.map(x => x.c.scope === 'per'
-      ? `<div class="cond"><span>${DAN_COND[x.c.type]}${scopeTag(x.c)}<div class="need">合格 ${condLine(x.c, 'red')} ／ <span class="gold-t">金 ${condLine(x.c, 'gold')}</span></div></span><span class="val"></span>${perCells(x.c, x.vals)}</div>`
-      : `<div class="cond"><span>${DAN_COND[x.c.type]}${scopeTag(x.c)}<div class="need">合格 ${condLine(x.c, 'red')} ／ <span class="gold-t">金 ${condLine(x.c, 'gold')}</span></div></span>
-          <span class="val">${dn(x.total)}</span><div class="mg">${x.total == null ? '<span class="muted">3曲演奏した挑戦がありません</span>' : marginText(mgOf(x.c, x.total, x.c.red), '合格') + '　' + marginText(mgOf(x.c, x.total, x.c.gold != null ? x.c.gold : x.c.red), '金合格')}${x.when ? ` <span class="muted">（${fmtDay(x.when)}）</span>` : ''}</div></div>`).join('') : ''}
+    ${condBest.length ? `<h3>条件ごとの段位内ベスト</h3><div class="muted" style="font-size:12px">条件ごとに、これまでの挑戦で一番よい値です（別々の挑戦の値を含みます）</div><div class="dgs" id="dgBest"></div>` : ''}
     ` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
   <div class="card"><h2>理論値チェック <span class="muted" style="font-weight:400">通常プレイを含む各曲の最高値から</span></h2>
@@ -290,6 +289,11 @@ function viewDanPage(id) {
     ${recs.length ? `<div class="list">${evs.map(({ r, e }) => danHistItem(r, e, d)).join('')}</div>` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
   ${danDeletedCard(id)}`;
+  if ($('#dgBest')) {
+    const cfgs = dgConfigs(d, { conds: condBest.map(x => ({ vals: x.vals || [], total: x.total })) }, ['done', 'done', 'done'], true);
+    cfgs.forEach(c => { if (c.scope === 'per') c.states = c.values.map(v => v != null ? 'done' : 'none'); });
+    dgRender($('#dgBest'), cfgs);
+  }
   $('#back').onclick = danBack;
   $('#danRecord').onclick = () => { danSt.form = null; danGo({ t: 'form', danId: id, id: null }); };
   bindDanBody();
@@ -360,7 +364,7 @@ function viewDanForm(danId, editId) {
     <label>リザルト写真（${DAN_PHOTOS}枚まで・任意）</label>
     <div class="photos4" id="dphotos"></div>
     <label>挑戦日時</label><input id="dplayed" type="datetime-local" value="${pa}">
-    <div class="livebox" id="dlive"></div>
+    <div class="livebox" id="dlive"><div id="dliveHead"></div><div class="dgs" id="dliveG"></div><div id="dliveNote"></div></div>
     <button class="btn" id="dsave">${rec ? '変更を保存' : '記録する'}</button>
     ${rec ? '<button class="btn sub" id="dcancel">キャンセル</button>' : ''}
   </div>`;
@@ -406,17 +410,16 @@ function danFormUpdate(d, charts) {
     if (auto) auto.textContent = t ? dn(t.score) : '—';
   });
   const e = danEval(d, fr, charts);
-  const rows = [];
-  if (e.soul) rows.push(`<div class="cond"><span>魂ゲージ ${e.soul.need.red}%以上</span><span class="val ${e.soul.v == null ? '' : e.soul.pass.red ? 'ok-t' : 'ng-t'}">${e.soul.v == null ? '—' : e.soul.v + '%'}</span></div>`);
-  e.conds.forEach(x => {
-    const cls = x.pass.gold ? 'gold-t' : x.pass.red ? 'ok-t' : (x.failAt != null ? 'ng-t' : '');
-    const val = x.per ? x.vals.map(dn).join(' / ') : dn(x.total);
-    rows.push(`<div class="cond"><span>${esc(danCondText(x.c, 'red'))}</span><span class="val ${cls}">${val}</span>
-      ${x.failAt != null ? `<div class="mg ng-t">${x.failAt + 1}曲目で達成失敗${x.failAt < 2 ? ` → ${x.failAt + 2}曲目以降は打ち切り` : ''}</div>` : ''}</div>`);
-  });
-  $('#dlive').innerHTML = `<div class="lt"><span>判定</span>${danEmblem(e.played ? e.result : null, e.frame)}</div>${rows.join('')}
-    ${e.played && e.played < 3 && e.failAt == null ? '<div class="muted" style="font-size:12px">3曲目まで入力すると合否が決まります</div>' : ''}
-    ${e.missing ? '<div class="muted" style="font-size:12px">判定に必要な値（魂ゲージ・最大コンボ・スコアなど）が空欄です</div>' : ''}`;
+  // 条件ゲージ：入力し終えた曲＝演奏終了後、次の曲＝演奏中、それより後（または達成失敗の後）＝未演奏
+  const ended = e.played === 3 || e.failAt != null;
+  const states = [0, 1, 2].map(i => i < e.played ? 'done' : i === e.played && !ended ? 'play' : 'none');
+  $('#dliveHead').innerHTML = `<div class="lt"><span>判定</span>${danEmblem(e.played ? e.result : null, e.frame)}</div>`
+    + (e.soul ? `<div class="cond"><span>魂ゲージ ${e.soul.need.red}%以上</span><span class="val ${e.soul.v == null ? '' : e.soul.pass.red ? 'ok-t' : 'ng-t'}">${e.soul.v == null ? '—' : e.soul.v + '%'}</span></div>` : '');
+  dgRender($('#dliveG'), dgConfigs(d, e, states, ended));
+  const fails = e.conds.filter(x => x.failAt != null).map(x => `${DAN_COND[x.c.type]}：${x.failAt + 1}曲目で達成失敗${x.failAt < 2 ? `（${x.failAt + 2}曲目以降は打ち切り）` : ''}`);
+  $('#dliveNote').innerHTML = (fails.length ? `<div class="mg ng-t" style="font-size:12px;margin-top:4px">${fails.map(esc).join('<br>')}</div>` : '')
+    + (e.played && e.played < 3 && e.failAt == null ? '<div class="muted" style="font-size:12px">3曲目まで入力すると合否が決まります</div>' : '')
+    + (e.missing ? '<div class="muted" style="font-size:12px">判定に必要な値（魂ゲージ・最大コンボ・スコアなど）が空欄です</div>' : '');
 }
 function renderDanPhotos() {
   const f = danSt.form, box = $('#dphotos'); if (!box) return;
@@ -471,16 +474,6 @@ function viewDanRec(id) {
   const badges = (r.status === 'rejected' ? '<span class="badge b-ng">却下</span>' : '') + (nPhoto ? `<span class="badge b-ok">📷 写真${nPhoto}枚</span>` : '<span class="badge b-mute">写真なし</span>') +
     (r._sv !== r.updatedAt ? '<span class="badge b-warn">未送信</span>' : '') + (e.played < 3 ? `<span class="badge b-mute">${e.played}曲目で終了</span>` : '');
   const goldGap = e.result === 'red' ? e.conds.filter(x => !x.pass.gold).map(x => DAN_COND[x.c.type]).concat(e.soul && !e.soul.pass.gold ? ['魂ゲージ'] : []) : [];
-  const lvTxt = (c, lv) => { const v = c[lv] != null ? c[lv] : c.red; return Array.isArray(v) ? v.map(dn).join(' / ') + DAN_OP[c.op] : dn(v) + DAN_OP[c.op]; };
-  const condRow = x => {
-    const cls = x.pass.gold ? 'gold-t' : x.pass.red ? 'ok-t' : 'ng-t';
-    if (x.per) return `<div class="cond"><span>${DAN_COND[x.c.type]}<span class="scope">曲別</span><div class="need">${lvTxt(x.c, 'red')} ／ <span class="gold-t">金 ${lvTxt(x.c, 'gold')}</span></div></span>
-      <span class="val ${cls}">${x.pass.gold ? '金 ✓' : x.pass.red ? '✓' : '✗'}</span>
-      <div class="mini3">${x.vals.map((v, i) => `<div class="${v == null ? '' : x.margin.gold[i] >= 0 ? 'gold-t' : x.margin.red[i] >= 0 ? 'ok-t' : 'ng-t'}">${i + 1}曲目 <b>${dn(v)}</b></div>`).join('')}</div></div>`;
-    return `<div class="cond"><span>${DAN_COND[x.c.type]}<span class="scope">3曲合計</span><div class="need">${lvTxt(x.c, 'red')} ／ <span class="gold-t">金 ${lvTxt(x.c, 'gold')}</span></div></span>
-      <span class="val ${cls}">${dn(x.total)}</span>
-      <div class="mg">${x.pass.gold ? '<span class="gold-t">金合格 ✓</span>' : x.pass.red ? `<span class="ok-t">合格 ✓ 余裕 ${x.margin.red}</span> ／ ${marginText(x.margin.gold, '金合格')}` : x.failAt != null ? `<span class="ng-t">${x.failAt + 1}曲目で達成失敗</span>` : marginText(x.margin.red, '合格')}</div></div>`;
-  };
   $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 戻る</button>
   <div class="card" style="margin-top:10px;text-align:center">
     <div>${danPlate(d.rank, true)}</div><div class="ver" style="margin-top:4px">${esc(d.version)}</div>
@@ -495,7 +488,7 @@ function viewDanRec(id) {
   <div class="card"><h2>条件の達成状況</h2>
     ${e.soul ? `<div class="cond"><span>魂ゲージ<div class="need">${e.soul.need.red}%以上 ／ <span class="gold-t">金 ${e.soul.need.gold}%以上</span></div></span>
       <span class="val ${e.soul.pass.gold ? 'gold-t' : e.soul.pass.red ? 'ok-t' : 'ng-t'}">${e.soul.v == null ? '—' : e.soul.v + '%'}</span></div>` : ''}
-    ${e.conds.map(condRow).join('')}
+    ${e.conds.length ? '<div class="dgs" id="dgRec"></div>' : ''}
   </div>
   <div class="card"><h2>曲ごとの結果</h2>
     ${charts.map((s, i) => { const t = r.tracks[i]; return `<div class="tpan t${i + 1}"><div class="tno">${i + 1}曲目</div>
@@ -504,6 +497,7 @@ function viewDanRec(id) {
       ${s ? `<button class="btn sub small" style="margin-top:6px" data-chart="${esc(s.id)}">譜面別統計 ›</button>` : ''}</div>`; }).join('')}
   </div>
   <div class="row" style="justify-content:flex-end"><button class="btn sub small" id="dEdit">編集</button><button class="btn sub small danger" id="dDel">削除</button></div>`;
+  dgRender($('#dgRec'), dgConfigs(d, e, dgDoneStates(e.played), true));
   $('#back').onclick = danBack;
   document.querySelectorAll('[data-chart]').forEach(el => el.onclick = () => openChartStats(el.dataset.chart));
   $('#dEdit').onclick = () => { danSt.form = null; danGo({ t: 'form', danId: r.danId, id: r.id }); };

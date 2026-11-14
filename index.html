@@ -25,6 +25,7 @@
 <script src="config.js"></script>
 <script src="common.js"></script>
 <script src="dan.js"></script>
+<script src="dan-gauge.js"></script>
 <script src="dan-view.js"></script>
 <script>
 'use strict';
@@ -502,6 +503,7 @@ function refreshChrome() {
 }
 function render() {
   refreshChrome();
+  document.querySelector('main').classList.remove('wide'); // 段位ページ・挑戦の詳細だけ、PCで横に広げる（条件ゲージの3つ並び）
   ({ input: viewInput, history: viewHistory, dan: viewDan, songs: viewSongs, mydata: viewMyData })[state.view]();
 }
 

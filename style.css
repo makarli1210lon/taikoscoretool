@@ -291,7 +291,6 @@ canvas.preview{width:100%;height:auto;border-radius:8px;border:1px solid var(--l
 .dcard{--tint:var(--card);--edge:var(--line);background:var(--tint);border-top:4px solid var(--edge);border-radius:12px;padding:8px 10px;margin-bottom:10px}
 .dcard.kyu{--tint:#FFF3DA;--edge:#FFCF75}.dcard.low{--tint:#DDF0F3;--edge:#4AAABA}.dcard.high{--tint:#FCE3DF;--edge:#F55336}
 .dcard.silver{--tint:#E8ECEF;--edge:#9aa1a8}.dcard.gold{--tint:#F8EDCB;--edge:#d0a12a}
-.dcard.nodef{opacity:.55}
 .dtop{display:flex;align-items:center;gap:6px;min-height:42px}
 .dtop .sp{flex:1}
 .ver{font-size:10px;color:var(--muted);font-weight:700;white-space:nowrap}
@@ -419,3 +418,47 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .urlf .btn{margin:0;flex-shrink:0;white-space:nowrap}
 .embw.fail{filter:none}
 .embw.empty{display:inline-block;filter:none}
+/* 段位一覧：まだ開けない段位（「すべての段位を表示」がオフのとき） */
+
+/* ===== 段位道場：条件ゲージ（dan-gauge.js）。横2560の設計座標で描き、幅に合わせて丸ごと縮める ===== */
+.dgs{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.dgw{container-type:inline-size;width:100%}
+.dg{--u:calc(100cqw / 2560);position:relative;width:100%;aspect-ratio:2560/290;user-select:none;-webkit-user-select:none}
+.dg.dg-tri{aspect-ratio:2560/320}
+.dg *{position:absolute;box-sizing:border-box;margin:0;padding:0}
+.dg .dg-card{left:calc(var(--u)*35);top:calc(var(--u)*50);width:calc(var(--u)*2495);height:calc(var(--u)*220);background:#e8e8e8;border-radius:calc(var(--u)*26);box-shadow:calc(var(--u)*7) calc(var(--u)*9) calc(var(--u)*5) rgba(0,0,0,.38)}
+.dg .dg-tab{left:calc(var(--u)*33);top:calc(var(--u)*47);width:calc(var(--u)*589);height:calc(var(--u)*63);background:#f5dab0;border:calc(var(--u)*5) solid #9b7550;border-radius:calc(var(--u)*30);box-shadow:calc(var(--u)*5) calc(var(--u)*6) calc(var(--u)*4) rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center}
+.dg .dg-tab img,.dg .dg-cond img{position:relative;display:block;width:auto;flex:none;max-width:none}
+.dg .dg-fade{left:calc(var(--u)*95);top:calc(var(--u)*138);width:calc(var(--u)*300);height:calc(var(--u)*90)}
+.dg .dg-ic{left:calc(var(--u)*48);top:calc(var(--u)*136);width:calc(var(--u)*94);height:calc(var(--u)*94)}
+.dg .dg-ic svg,.dg .dg-bdg svg{position:static;width:100%;height:100%;display:block}
+.dg .dg-bdgt{left:50%;top:50%;height:46%;width:auto;max-width:none;transform:translate(-50%,-50%)}
+.dg .dg-cond{right:calc(var(--u)*1938);top:calc(var(--u)*185);height:0;display:flex;align-items:center;overflow:visible}
+.dg .dg-bar{overflow:hidden;border:solid #000;background:#444;box-shadow:calc(var(--u)*6) calc(var(--u)*8) calc(var(--u)*5) rgba(0,0,0,.35)}
+.dg .dg-bar.dg-sm.dg-off{background:#d0d0d0;border:none;box-shadow:none}
+.dg .dg-fill{left:0;top:0;bottom:0;overflow:hidden}
+.dg .dg-fill.dg-rb{background:linear-gradient(90deg,#ffc13e 0%,#d6fe1a 3%,#78feb5 8%,#78fdfe 11%,#81d1ff 14%,#946dff 20%,#d964fe 27%,#fd5dd8 33%,#ff5e8b 39%,#ffa54f 45%,#ffc13e 50%,#d6fe1a 53%,#78feb5 58%,#78fdfe 61%,#81d1ff 64%,#946dff 70%,#d964fe 77%,#fd5dd8 83%,#ff5e8b 89%,#ffa54f 95%,#ffc13e 100%) 0 0/calc(var(--iw)*2) 100%;animation:dg-rb var(--rbT,1s) linear infinite}
+@keyframes dg-rb{from{background-position:calc(var(--iw)*-1) 0}to{background-position:0 0}}
+.dg .dg-flash,.dg .dg-blink{inset:0;background:#fff;opacity:0;pointer-events:none}
+.dg .dg-flash.dg-go{animation:dg-fl .3s linear forwards}
+@keyframes dg-fl{from{opacity:1}to{opacity:0}}
+.dg .dg-blink.dg-bs{animation:dg-bs 1s ease-in-out infinite}
+@keyframes dg-bs{0%,100%{opacity:0}50%{opacity:.6}}
+.dg .dg-blink.dg-bf{animation:dg-bf .483s infinite}
+/* 本家の動画から計測：真っ白→素早く落ちてゆっくり元色へ→少し止まる→だんだん速く白へ */
+@keyframes dg-bf{0%{opacity:1;animation-timing-function:cubic-bezier(.25,.7,.45,1)}45%{opacity:0}59%{opacity:0;animation-timing-function:cubic-bezier(.55,0,.75,.45)}100%{opacity:1}}
+.dg .dg-fill.dg-dim{animation:dg-dim 1s linear infinite}
+@keyframes dg-dim{0%,100%{opacity:1}50%{opacity:0}}
+.dg .dg-failt{inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.dg .dg-failt img{position:static;height:74%;width:auto;display:block;max-width:none}
+.dg .dg-num{display:flex;align-items:flex-start;pointer-events:none;transform-origin:50% 90%}
+.dg .dg-num.dg-pop{animation:dg-pop .15s forwards}
+@keyframes dg-pop{0%{transform:scaleY(1);animation-timing-function:ease-out}22%{transform:scaleY(1.135);animation-timing-function:linear}100%{transform:scaleY(1)}}
+.dg .dg-num span{position:static;display:flex;justify-content:center;height:100%;overflow:visible}
+.dg .dg-num img{position:static;display:block;height:100%;width:auto;flex:none;max-width:none}
+.dg .dg-shade{inset:0;background:#111;opacity:0;pointer-events:none;transition:opacity .233s linear}
+.dg .dg-sw{transition:opacity .233s linear}.dg .dg-cond.dg-sw{transition-duration:.17s}
+.dg.dg-swout .dg-sw{opacity:0}.dg.dg-swout .dg-shade.dg-main{opacity:1}
+.dg .dg-hit{cursor:pointer;border-radius:calc(var(--u)*12);-webkit-tap-highlight-color:transparent;outline:none}
+.dg .dg-hit:hover,.dg .dg-hit:focus-visible{background:rgba(255,255,255,.2)}
+@media (prefers-reduced-motion:reduce){.dg .dg-fill.dg-rb,.dg .dg-blink,.dg .dg-fill.dg-dim{animation:none}}
