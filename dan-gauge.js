@@ -13,6 +13,9 @@ const DG = {
   swapOut: 266, swapIn: 240,         // 曲の切り替え：黒へ沈む（約0.23秒＋余白）／戻る（ミリ秒）
   // 確定した調整値（設計座標）
   adj: { lbH: 50, lbY: 0, cnH: 65, cnSp: -8, cnY: -4, cwH: 65, cwGap: 11, cwY: -4, vH: 133, vSp: -5, vX: 31, vY: -13 },
+  // 1＋小2：大ゲージ・小ゲージの右端を通し1本（x 648〜2222）の右端にそろえる（本家の画面から計測）
+  big: { w: 1051 },
+  small: { x: 1839, w: 383, h: 57, y0: 88, step: 90, bx: 1798, br: 28, nx: 10, ny: -5, nh: 46 },
   tri: { pitch: 833, bx: 119, by: 202, br: 48, gx: 246, gy: 165, gw: 583, gh: 84 },
   label: { good: 'good', ok: 'ok', bad: 'bad', roll: 'roll', score: 'score', combo: 'combo', hit: 'hit', soul: 'soul' },
   tomoe: 'M-0.0 -32.0 L-1.6 -32.0 L-3.3 -31.8 L-4.9 -31.6 L-6.5 -31.3 L-8.1 -30.9 L-9.7 -30.5 L-11.3 -29.9 L-12.8 -29.3 L-14.3 -28.6 L-15.8 -27.9 L-17.2 -27.0 L-18.5 -26.1 L-19.9 -25.1 L-21.1 -24.0 L-22.3 -22.9 L-23.5 -21.7 L-24.6 -20.5 L-25.6 -19.2 L-26.5 -17.9 L-27.4 -16.5 L-28.2 -15.0 L-29.0 -13.6 L-29.6 -12.1 L-30.2 -10.5 L-30.7 -9.0 L-31.1 -7.4 L-31.5 -5.7 L-31.7 -4.1 L-31.9 -2.5 L-32.0 -0.8 L-32.0 0.8 L-31.9 2.5 L-31.7 4.1 L-31.5 5.7 L-31.1 7.3 L-30.7 8.9 L-30.2 10.5 L-29.6 12.0 L-29.0 13.5 L-28.3 15.0 L-28.3 15.0 L-28.6 13.4 L-28.9 11.7 L-29.1 10.1 L-29.2 8.5 L-29.3 6.9 L-29.2 5.3 L-29.0 3.7 L-28.8 2.2 L-28.4 0.7 L-28.0 -0.7 L-27.6 -2.1 L-27.0 -3.5 L-26.4 -4.8 L-25.7 -6.1 L-24.9 -7.3 L-24.1 -8.4 L-23.3 -9.5 L-22.4 -10.5 L-21.4 -11.4 L-20.4 -12.3 L-19.4 -13.1 L-18.3 -13.8 L-17.3 -14.4 L-16.2 -15.0 L-15.0 -15.4 L-13.9 -15.8 L-12.8 -16.2 L-11.7 -16.4 L-10.5 -16.6 L-9.4 -16.7 L-8.3 -16.7 L-7.2 -16.6 L-6.2 -16.4 L-5.2 -16.2 L-4.2 -15.9 L-3.2 -15.5 L-2.3 -15.0 L-1.5 -14.5 L-0.7 -13.8 L-0.0 -12.8 L0.0 -12.8 L0.8 -12.8 L1.5 -12.9 L2.2 -13.1 L3.0 -13.3 L3.7 -13.5 L4.4 -13.8 L5.0 -14.2 L5.6 -14.6 L6.2 -15.1 L6.8 -15.6 L7.3 -16.2 L7.8 -16.8 L8.2 -17.4 L8.6 -18.0 L8.9 -18.7 L9.1 -19.4 L9.3 -20.2 L9.5 -20.9 L9.6 -21.6 L9.6 -22.4 L9.6 -23.2 L9.5 -23.9 L9.3 -24.6 L9.1 -25.4 L8.9 -26.1 L8.6 -26.8 L8.2 -27.4 L7.8 -28.0 L7.3 -28.6 L6.8 -29.2 L6.2 -29.7 L5.6 -30.2 L5.0 -30.6 L4.4 -31.0 L3.7 -31.3 L3.0 -31.5 L2.2 -31.7 L1.5 -31.9 L0.8 -32.0 L0.0 -32.0Z',
@@ -131,8 +134,8 @@ class DgBar {
 }
 
 /* ---------- 描画：条件1つ分（見出し・アイコン・条件の値・ゲージ） ---------- */
-const DG_MAIN = per => { const a = DG.adj; return { x: 648, y: 88, w: per ? 1218 : 1574, h: 147, bw: 9, r: 16, nx: a.vX, ny: a.vY, nh: a.vH, sp: a.vSp }; };
-const DG_SMALL = i => { const a = DG.adj, k = 56 / 147; return { x: 2022, y: 94 + i * 82, w: 440, h: 56, bw: 5, r: 10, nx: 2, ny: a.vY * k - 1, nh: a.vH * k, sp: a.vSp * k, small: true }; };
+const DG_MAIN = per => { const a = DG.adj; return { x: 648, y: 88, w: per ? DG.big.w : 1574, h: 147, bw: 9, r: 16, nx: a.vX, ny: a.vY, nh: a.vH, sp: a.vSp }; };
+const DG_SMALL = i => { const a = DG.adj, m = DG.small, k = m.nh / a.vH; return { x: m.x, y: m.y0 + i * m.step, w: m.w, h: m.h, bw: 5, r: 10, nx: m.nx, ny: m.ny, nh: m.nh, sp: a.vSp * k, small: true }; };
 const DG_TRIG = i => { const a = DG.adj, t = DG.tri, k = t.gh / 147; return { x: t.gx + i * t.pitch, y: t.gy, w: t.gw, h: t.gh, bw: 6, r: 12, nx: a.vX * k, ny: a.vY * k, nh: a.vH * k, sp: a.vSp * k, small: true }; };
 const DG_TOMOE = `<svg viewBox="-50 -50 100 100" aria-hidden="true"><circle r="48" fill="#f2a71f"/><circle r="41" fill="#ffcd2b"/>${[0, 1, 2].map(k => `<path d="${DG.tomoe}" fill="#fff6cf" transform="rotate(${k * 120})"/>`).join('')}</svg>`;
 function dgBadge(i, off) {
@@ -161,7 +164,8 @@ class DgGauge {
     this.main.num.classList.add('dg-sw'); this.main.shade.classList.add('dg-main');
     this.smalls = [0, 1].map(k => {
       const bd = document.createElement('div'); bd.className = 'dg-bdg dg-sw';
-      Object.assign(bd.style, { left: dgU(1947), top: dgU(94 + k * 82 + 1), width: dgU(54), height: dgU(54) });
+      const m = DG.small, cy = m.y0 + k * m.step + m.h / 2;
+      Object.assign(bd.style, { left: dgU(m.bx - m.br), top: dgU(cy - m.br), width: dgU(m.br * 2), height: dgU(m.br * 2) });
       el.append(bd);
       const bar = new DgBar(el, DG_SMALL(k)); bar.el.classList.add('dg-sw'); bar.num.classList.add('dg-sw');
       return { bd, bar };
@@ -180,7 +184,8 @@ class DgGauge {
     // 1＋小2：小さいゲージの行を押すと、その曲を大きく表示する
     this.smalls.forEach((s, k) => {
       const h = s.hit = document.createElement('div'); h.className = 'dg-hit'; h.setAttribute('role', 'button'); h.tabIndex = 0;
-      Object.assign(h.style, { left: dgU(1935), top: dgU(94 + k * 82 - 8), width: dgU(545), height: dgU(72) });
+      const m = DG.small, y = m.y0 + k * m.step;
+      Object.assign(h.style, { left: dgU(m.bx - m.br - 12), top: dgU(y - 8), width: dgU(m.x + m.w - (m.bx - m.br) + 24), height: dgU(m.h + 16) });
       const go = () => { if (s.song != null) this.swapTo(s.song); };
       h.onclick = go; h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
       el.append(h);
