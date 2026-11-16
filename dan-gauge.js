@@ -28,9 +28,10 @@ const dgCh = ch => DG_CH[ch] || ch;
 /* ---------- 判定（入力5つ → ゲージ1本の状態） ---------- */
 /**
  * op：'ge'（以上）| 'lt'（未満）、red・gold：合格の値（gold が空なら red と同じ）、value：実際の値、finished：演奏終了後か
+ * result：リザルト画面の見た目（未満条件の演奏終了後だけ、本家のリザルト画面と同じ色分けにする）
  * 返り値 { disp 表記値, level 0〜100, color, blink ''|'s'|'f'|'r', num 'w'|'g'|'d'|'c', fail, meetRed, meetGold }
  */
-function dgEval(op, red, gold, value, finished) {
+function dgEval(op, red, gold, value, finished, result) {
   red = Math.max(0, +red || 0); value = Math.max(0, +value || 0);
   const g = (gold === '' || gold == null || isNaN(+gold)) ? red : +gold;
   const disp = op === 'lt' ? Math.max(0, red - value) : value;
@@ -56,6 +57,12 @@ function dgEval(op, red, gold, value, finished) {
     }
   } else {
     if (disp === 0) { color = 'gray'; fail = true; num = 'd'; }
+    else if (finished && result) {                    // リザルト画面：残りの割合で色分け
+      if (disp * 10 < red) { color = 'dkred'; blink = 'r'; }                     // 0%より大きく10%未満
+      else if (disp * 10 < red * 3) color = 'red';                              // 10%以上30%未満
+      else if (meetGold) { color = 'rainbow'; num = 'c'; }                      // 30%以上で金合格
+      else color = 'yellow';                                                    // 30%以上で赤合格
+    }
     else if (finished) { if (meetGold) { color = 'rainbow'; num = 'c'; } else color = 'pink'; }
     else if (disp < 5 && level < 100) { color = 'dkred'; blink = 'r'; }
     else if (disp * 10 >= red * 3) color = meetGold ? 'pink' : 'yellow';   // 30%ちょうどを含む
@@ -218,7 +225,7 @@ class DgGauge {
     const a = DG.adj, lb = DG.label[c.type];
     this.tab.innerHTML = lb ? `<img src="${dgImg('l-' + lb)}" alt="${esc(DAN_COND[c.type] || '')}" style="height:${dgU(a.lbH)};top:${dgU(a.lbY)}">` : '';
     const has = i => c.states[i] !== 'none' && c.reds[i] != null;   // 曲別：表示できる曲か
-    const stOf = i => has(i) ? dgEval(c.op, c.reds[i], c.golds[i], c.values[i] ?? 0, c.states[i] === 'done') : null;
+    const stOf = i => has(i) ? dgEval(c.op, c.reds[i], c.golds[i], c.values[i] ?? 0, c.states[i] === 'done', c.result) : null;
     const single = [this.fade, this.ic, this.cond, this.main.el, this.main.num];
     const smallEls = this.smalls.flatMap(s => [s.bd, s.bar.el, s.bar.num, s.hit]);
     const triEls = this.tri.flatMap(t => [t.fd, t.bd, t.cd, t.bar.el, t.bar.num]);
@@ -247,7 +254,7 @@ class DgGauge {
     if (!per) {
       this.show(smallEls, false);
       this.main.setGeo(DG_MAIN(false));
-      this.main.set(c.value == null ? null : dgEval(c.op, c.red, c.gold, c.value, c.finished));
+      this.main.set(c.value == null ? null : dgEval(c.op, c.red, c.gold, c.value, c.finished, c.result));
       return;
     }
     this.show(smallEls, true);
@@ -274,9 +281,9 @@ function dgConfigs(dan, e, states, finished) {
     if (c.scope === 'per') {
       const reds = [0, 1, 2].map(i => (c.red || [])[i] ?? null);
       const golds = [0, 1, 2].map(i => (c.gold || [])[i] ?? reds[i]);
-      return { type: c.type, op: c.op, scope: 'per', reds, golds, values: x.vals.slice(), states: states.slice() };
+      return { type: c.type, op: c.op, scope: 'per', reds, golds, values: x.vals.slice(), states: states.slice(), result: true };
     }
-    return { type: c.type, op: c.op, scope: 'total', red: c.red, gold: c.gold != null ? c.gold : c.red, value: x.total, finished };
+    return { type: c.type, op: c.op, scope: 'total', red: c.red, gold: c.gold != null ? c.gold : c.red, value: x.total, finished, result: true }; // サイトの3画面はリザルト画面の見た目
   });
 }
 /** 記録を見る画面の状態：演奏した曲は演奏終了後、それ以外は未演奏 */
