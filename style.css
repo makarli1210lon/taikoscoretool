@@ -461,4 +461,9 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .dg.dg-swout .dg-sw{opacity:0}.dg.dg-swout .dg-shade.dg-main{opacity:1}
 .dg .dg-hit{cursor:pointer;border-radius:calc(var(--u)*12);-webkit-tap-highlight-color:transparent;outline:none}
 .dg .dg-hit:hover,.dg .dg-hit:focus-visible{background:rgba(255,255,255,.2)}
+.dg .dg-marks{inset:0;pointer-events:none}
+.dg .dg-mline{background:#fff}
+.dg .dg-mtri svg{position:static;display:block;width:100%;height:100%}
+.dg .dg-mlab{height:0;display:flex;align-items:center}
+.dg .dg-mlab img{position:relative;display:block;width:auto;flex:none;max-width:none}
 @media (prefers-reduced-motion:reduce){.dg .dg-fill.dg-rb,.dg .dg-blink,.dg .dg-fill.dg-dim{animation:none}}

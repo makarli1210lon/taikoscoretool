@@ -85,6 +85,50 @@ function dgBigSong(c) {
   return done.reduce((a, i) => m(i) < m(a) ? i : a, done[0]);
 }
 
+/* ---------- 理論値チェック ---------- */
+/** 理論値の位置（0〜100%）
+ *  以上：0〜金をそのまま比例。赤と金の見た目の差が5%未満なら赤＝95%に置き、赤〜金を5%ぶんに引き延ばす（値が同じときはしない）
+ *  未満：金＝100%・赤＝70%・赤×20＝0%を log(値＋1) で補間。金合格を満たす値はすべて100% */
+function dgTheoryPos(op, red, gold, v) {
+  red = Math.max(0, +red || 0); v = Math.max(0, +v || 0);
+  const g = (gold === '' || gold == null || isNaN(+gold)) ? red : +gold;
+  if (op === 'ge') {
+    if (g <= 0) return 100;
+    if (red < g && red / g * 100 > 95) return v >= g ? 100 : v <= red ? (red > 0 ? v / red * 95 : 95) : 95 + 5 * (v - red) / (g - red);
+    return Math.min(100, v / g * 100);
+  }
+  const L = x => Math.log(x + 1), bot = L(red * 20), mid = L(red), top = L(g);
+  if (v <= g) return 100;
+  if (v >= red * 20) return 0;
+  if (g >= red) return 100 * (bot - L(v)) / (bot - mid);
+  if (v <= red) return 70 + 30 * (mid - L(v)) / (mid - top);
+  return 70 * (bot - L(v)) / (bot - mid);
+}
+/** 理論値のゲージの状態（数字は減点にせず理論値そのもの） */
+function dgTheorySt(op, red, gold, v) {
+  red = +red || 0; v = Math.max(0, +v || 0);
+  const g = (gold === '' || gold == null || isNaN(+gold)) ? red : +gold;
+  const p = dgTheoryPos(op, red, g, v);
+  const level = p <= 0 ? 0 : p >= 100 ? 100 : Math.min(99, Math.floor(p) + 1);
+  const meetRed = op === 'lt' ? v < red : v >= red, meetGold = op === 'lt' ? v < g : v >= g;
+  let color = 'yellow', num = 'w', blink = '';
+  if (meetGold && meetRed) { color = 'rainbow'; num = 'c'; }
+  else if (meetRed) {                                   // 金合格までの進み具合（値の比例）で白く点滅
+    color = 'pink';
+    const span = op === 'lt' ? red - g : g - red, got = op === 'lt' ? red - v : v - red;
+    if (span > 0) { if (got * 3 >= span * 2) blink = 'f'; else if (got * 3 >= span) blink = 's'; }
+  }
+  else if (op === 'ge' && v <= 0) { color = 'gray'; num = 'g'; }
+  else if (op === 'ge' ? v * 2 < red : p < 40) color = 'dkyellow';   // 以上：赤合格の50%未満、未満：見た目の40%未満
+  return { disp: v, level, p, color, blink, num, fail: false, meetRed, meetGold };
+}
+const DG_MARK = '<svg viewBox="0 0 40 34" aria-hidden="true"><path d="M4 4H36L20 30Z" fill="#fff" stroke="#000" stroke-width="5" stroke-linejoin="round"/></svg>';
+/** 条件の数字だけを画像で組む（▼の横のラベル） */
+function dgNumHtml(v, k) {
+  const a = DG.adj;
+  return String(v).split('').map((ch, i) => `<img src="${dgImg('c-' + dgCh(ch))}" alt="${ch}" style="height:${dgU(a.cnH * k)};margin-left:${i ? dgU(a.cnSp * k) : 0}">`).join('');
+}
+
 /* ---------- 描画：ゲージ1本 ---------- */
 class DgBar {
   constructor(parent, geo) {
@@ -197,6 +241,7 @@ class DgGauge {
       h.onclick = go; h.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
       el.append(h);
     });
+    this.marks = document.createElement('div'); this.marks.className = 'dg-marks dg-sw'; el.append(this.marks); // 理論値の赤・金の線と▼
     this.focus = null; this.ctx = null; this.busy = false; this.icKey = null; this.mode = null; this.last = null;
     if (window.ResizeObserver) new ResizeObserver(() => { if (this.last && this.pickMode(this.last) !== this.mode) this.set(this.last); }).observe(el);
   }
@@ -225,7 +270,9 @@ class DgGauge {
     const a = DG.adj, lb = DG.label[c.type];
     this.tab.innerHTML = lb ? `<img src="${dgImg('l-' + lb)}" alt="${esc(DAN_COND[c.type] || '')}" style="height:${dgU(a.lbH)};top:${dgU(a.lbY)}">` : '';
     const has = i => c.states[i] !== 'none' && c.reds[i] != null;   // 曲別：表示できる曲か
-    const stOf = i => has(i) ? dgEval(c.op, c.reds[i], c.golds[i], c.values[i] ?? 0, c.states[i] === 'done', c.result) : null;
+    const T = !!c.theory, marks = [];                               // T：理論値チェック
+    const stOf = i => !has(i) ? null : T ? dgTheorySt(c.op, c.reds[i], c.golds[i], c.values[i])
+      : dgEval(c.op, c.reds[i], c.golds[i], c.values[i] ?? 0, c.states[i] === 'done', c.result);
     const single = [this.fade, this.ic, this.cond, this.main.el, this.main.num];
     const smallEls = this.smalls.flatMap(s => [s.bd, s.bar.el, s.bar.num, s.hit]);
     const triEls = this.tri.flatMap(t => [t.fd, t.bd, t.cd, t.bar.el, t.bar.num]);
@@ -238,8 +285,9 @@ class DgGauge {
         t.fd.style.background = `linear-gradient(90deg, ${f} 0%, ${f}00 100%)`;
         t.cd.innerHTML = dgCondHtml(c.reds[i], c.op, 0.5);
         t.bar.set(stOf(i));
+        if (T && on) marks.push([t.bar.geo, c.reds[i], c.golds[i], true]);
       });
-      return;
+      return this.drawMarks(c, marks);
     }
     this.show(triEls, false); this.show(single, true);
     const big = this.big = per ? (this.focus != null && has(this.focus) ? this.focus : dgBigSong(c)) : 0;
@@ -254,19 +302,44 @@ class DgGauge {
     if (!per) {
       this.show(smallEls, false);
       this.main.setGeo(DG_MAIN(false));
-      this.main.set(c.value == null ? null : dgEval(c.op, c.red, c.gold, c.value, c.finished, c.result));
-      return;
+      this.main.set(c.value == null ? null : T ? dgTheorySt(c.op, c.red, c.gold, c.value) : dgEval(c.op, c.red, c.gold, c.value, c.finished, c.result));
+      if (T && c.value != null) marks.push([this.main.geo, c.red, c.gold, true]);
+      return this.drawMarks(c, marks);
     }
     this.show(smallEls, true);
     this.main.setGeo(DG_MAIN(true));
     this.main.set(stOf(big));
+    if (T && has(big)) marks.push([this.main.geo, c.reds[big], c.golds[big], true]);
     [0, 1, 2].filter(i => i !== big).forEach((i, k) => {
       const s = this.smalls[k], on = has(i);
       s.song = on ? i : null; s.hit.style.display = on ? '' : 'none';
       s.hit.setAttribute('aria-label', `${i + 1}曲目を大きく表示`);
       s.bd.innerHTML = dgBadge(i, !on);
       s.bar.set(stOf(i));
+      if (T && on) marks.push([s.bar.geo, c.reds[i], c.golds[i], false]);   // 小ゲージは線だけ
     });
+    this.drawMarks(c, marks);
+  }
+  /** 理論値：赤・金の位置に白線と▼（金が無ければ1本）。赤と金が近く金のラベルが重なるときは▼の右に出す */
+  drawMarks(c, list) {
+    if (!c.theory) { this.marks.innerHTML = ''; return; }
+    const a = DG.adj;
+    this.marks.innerHTML = list.map(([g, red, gold, lab]) => {
+      const k = g.h / 147, ix = g.x + g.bw, iw = g.w - g.bw * 2, iy = g.y + g.bw, ih = g.h - g.bw * 2;
+      const gv = gold == null || gold === '' ? red : +gold;
+      const vals = [red]; if (gv !== +red) vals.push(gv);
+      const xs = vals.map(v => Math.min(ix + iw - 4 * k, Math.max(ix + 4 * k, ix + iw * dgTheoryPos(c.op, red, gv, v) / 100)));
+      const lw = v => String(v).length * a.cnH * 0.7 * k * 0.62 + 10 * k;
+      return vals.map((v, n) => {
+        const x = xs[n];
+        let h = `<div class="dg-mline" style="left:${dgU(x - 4 * k)};top:${dgU(iy)};width:${dgU(8 * k)};height:${dgU(ih)}"></div>`;
+        if (!lab) return h;
+        h += `<div class="dg-mtri" style="left:${dgU(x - 20 * k)};top:${dgU(g.y - 20 * k)};width:${dgU(40 * k)};height:${dgU(34 * k)}">${DG_MARK}</div>`;
+        const flip = n === 1 && x - xs[0] < lw(v) + 44 * k;
+        const pos = flip ? `left:${dgU(x + 22 * k)}` : `right:${dgU(2560 - (x - 22 * k))}`;
+        return h + `<div class="dg-mlab" style="${pos};top:${dgU(g.y - 4 * k)}">${dgNumHtml(v, 0.7 * k)}</div>`;
+      }).join('');
+    }).join('');
   }
 }
 

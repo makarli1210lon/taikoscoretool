@@ -272,23 +272,30 @@ function viewDanPage(id) {
     ` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
   <div class="card"><h2>理論値チェック <span class="muted" style="font-weight:400">通常プレイを含む各曲の最高値から</span></h2>
-    ${theory.length ? theory.map(x => {
-      if (x.c.scope === 'per') {
-        const okN = x.vals.filter((v, i) => v != null && (x.c.red || [])[i] != null && (x.c.op === 'lt' ? v < x.c.red[i] : v >= x.c.red[i])).length;
-        const lack = x.vals.map((v, i) => ({ i, m: mgOf(x.c, v, (x.c.red || [])[i]) })).filter(y => y.m != null && y.m < 0);
-        return `<div class="cond"><span>${DAN_COND[x.c.type]}${scopeTag(x.c)}<div class="need">合格 ${condLine(x.c, 'red')}</div></span><span class="val ${okN === 3 ? 'ok-t' : 'ng-t'}">${okN}/3 ${okN === 3 ? '✓' : '✗'}</span>
-          ${perCells(x.c, x.vals)}${lack.length ? `<div class="mg ng-t">${lack.map(y => `${y.i + 1}曲目があと ${-y.m}`).join('、')}</div>` : ''}</div>`;
-      }
-      const sum = sumNeed(x.c, x.vals), m = mgOf(x.c, sum, x.c.red);
-      return `<div class="cond"><span>${DAN_COND[x.c.type]}${scopeTag(x.c)}<div class="need">合格 ${condLine(x.c, 'red')}</div></span><span class="val ${m == null ? '' : m >= 0 ? 'ok-t' : 'ng-t'}">${dn(sum)}${m == null ? '' : m >= 0 ? ' ✓' : ' ✗'}</span>
-        <div class="mini3">${x.vals.map((v, i) => `<div>${i + 1}曲目 <b>${dn(v)}</b></div>`).join('')}</div>
-        <div class="mg">${m == null ? '<span class="muted">記録のない曲があります</span>' : marginText(m, '合格') + '　' + marginText(mgOf(x.c, sum, x.c.gold != null ? x.c.gold : x.c.red), '金合格')}</div></div>`;
-    }).join('') + '<div class="muted" style="margin-top:8px">※ 各曲の最高値の組み合わせです。3曲合計の条件と魂ゲージは目安です。</div>' : '<div class="muted">魂ゲージ以外の条件がない段位です。</div>'}
+    ${theory.length ? `<div class="dgs" id="dgTheory"></div>
+      <div class="mgs">${theory.map(x => {
+        const nm = DAN_COND[x.c.type] + scopeTag(x.c);
+        if (x.c.scope === 'per') {
+          const lack = x.vals.map((v, i) => ({ i, m: mgOf(x.c, v, (x.c.red || [])[i]) })).filter(y => y.m != null && y.m < 0);
+          const none = x.vals.some(v => v == null);
+          return `<div class="mg"><b>${nm}</b>　${lack.length ? `<span class="ng-t">${lack.map(y => `${y.i + 1}曲目があと ${-y.m}`).join('、')}</span>` : none ? '<span class="muted">記録のない曲があります</span>' : '<span class="ok-t">3曲とも合格 ✓</span>'}</div>`;
+        }
+        const sum = sumNeed(x.c, x.vals), m = mgOf(x.c, sum, x.c.red);
+        return `<div class="mg"><b>${nm}</b>　${m == null ? '<span class="muted">記録のない曲があります</span>' : marginText(m, '合格') + '　' + marginText(mgOf(x.c, sum, x.c.gold != null ? x.c.gold : x.c.red), '金合格')}</div>`;
+      }).join('')}</div>
+      <div class="muted" style="margin-top:8px">※ 各曲の最高値の組み合わせです。3曲合計の条件と魂ゲージは目安です。</div>` : '<div class="muted">魂ゲージ以外の条件がない段位です。</div>'}
   </div>
   <div class="card"><h2>挑戦履歴（${recs.length}回）</h2>
     ${recs.length ? `<div class="list">${evs.map(({ r, e }) => danHistItem(r, e, d)).join('')}</div>` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
   ${danDeletedCard(id)}`;
+  if ($('#dgTheory')) {  // 理論値チェック：赤・金の線と▼つきのゲージ（数字は理論値そのもの）
+    dgRender($('#dgTheory'), theory.map(x => x.c.scope === 'per'
+      ? { type: x.c.type, op: x.c.op, scope: 'per', theory: true,
+          reds: [0, 1, 2].map(i => (x.c.red || [])[i] ?? null), golds: [0, 1, 2].map(i => (x.c.gold || [])[i] ?? (x.c.red || [])[i] ?? null),
+          values: x.vals.slice(), states: x.vals.map(v => v != null ? 'done' : 'none') }
+      : { type: x.c.type, op: x.c.op, scope: 'total', theory: true, red: x.c.red, gold: x.c.gold != null ? x.c.gold : x.c.red, value: sumNeed(x.c, x.vals) }));
+  }
   if ($('#dgBest')) {
     const cfgs = dgConfigs(d, { conds: condBest.map(x => ({ vals: x.vals || [], total: x.total })) }, ['done', 'done', 'done'], true);
     cfgs.forEach(c => { if (c.scope === 'per') c.states = c.values.map(v => v != null ? 'done' : 'none'); });
