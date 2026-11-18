@@ -9,12 +9,76 @@ const danSt = {
   stack: [],            // 一覧の先の画面 [{ t:'page'|'form'|'rec', id, danId }]
   incDan: true,         // 譜面別統計に段位内プレイを含める
   form: null,           // 入力中の挑戦（写真の一時保管など）
-  delOpen: false
+  delOpen: false,
+  thSrc: 'all',         // 理論値チェック・曲別理論値の対象：'all' 全て ／ 'dan' 段位のみ ／ 'normal' 通常演奏のみ
+  tgEdit: null          // 曲別の目標を編集中の段位ID
 };
 let danStLoaded = false;
 function danPrefs() {
   if (danStLoaded) return; danStLoaded = true;
   try { const v = localStorage.getItem('taikoScore.incDan'); if (v != null) danSt.incDan = v === '1'; } catch (e) {}
+  try { const v = localStorage.getItem('taikoScore.thSrc'); if (['all', 'dan', 'normal'].includes(v)) danSt.thSrc = v; } catch (e) {}
+}
+function setThSrc(v) { danSt.thSrc = v; try { localStorage.setItem('taikoScore.thSrc', v); } catch (e) {} render(); }
+
+/* ----- 曲別理論値・目標 ----- */
+const TH_SRC = { all: '全て', dan: '段位のみ', normal: '通常演奏のみ' };
+/** 理論値の対象になる、その譜面のプレイ（通常演奏・段位内プレイ） */
+function thPlays(chartId) {
+  const src = danSt.thSrc;
+  const normal = src === 'dan' ? [] : db.records.filter(r => !r.deleted && r.songId === chartId);
+  return src === 'normal' ? normal : normal.concat(danVirtualFor(chartId));
+}
+/** 自分で決めた曲別の目標（端末ごと）{ [段位ID]: { [条件の種類]: [1曲目, 2曲目, 3曲目] } } */
+function tgLoad() { try { return JSON.parse(localStorage.getItem('taikoScore.danTargets') || '{}') || {}; } catch (e) { return {}; } }
+function tgSave(all) { try { localStorage.setItem('taikoScore.danTargets', JSON.stringify(all)); } catch (e) {} }
+/** 曲別理論値で見る2項目（3曲通しの条件から優先順に。最大コンボ・魂ゲージは除く） */
+function thItems(d) {
+  const tot = (d.conds || []).filter(c => c.scope !== 'per');
+  const of = t => tot.find(c => c.type === t);
+  const order = [of('ok') ? 'ok' : of('good') ? 'good' : null, 'bad', 'score', 'roll', 'hit'].filter(Boolean);
+  const items = order.filter(t => of(t)).slice(0, 2).map(t => ({ type: t, c: of(t) }));
+  if (!items.length) items.push({ type: 'ok', c: null });
+  if (items.length < 2) items.push(items[0].type === 'bad' ? { type: 'ok', c: null } : { type: 'bad', c: null });
+  return items.map(x => ({ ...x, op: x.type === 'ok' || x.type === 'bad' ? 'lt' : 'ge' }));
+}
+/** 許される数を3曲目から1つずつ割り振る（例：14 → 4／5／5） */
+function thDist(n) { const sh = [0, 0, 0]; for (let k = 0; k < Math.max(0, n); k++) sh[2 - (k % 3)]++; return sh; }
+/** 赤合格を基準にした自動の目標（スコア・連打数・たたけた数は自動なし） */
+function thAutoTarget(item, charts) {
+  const c = item.c;
+  if (!c || c.red == null) return [null, null, null];
+  if (item.op === 'lt') return thDist(c.red - 1);       // 可・不可：1曲ごとに許される数
+  if (item.type === 'good') {                            // 良：「ノーツ数の合計−合格の値」を良以外に許される数として割り振る
+    if (!charts.every(s => s && s.maxCombo)) return [null, null, null];
+    const sh = thDist(charts.reduce((a, s) => a + s.maxCombo, 0) - c.red);
+    return charts.map((s, i) => s.maxCombo - sh[i]);
+  }
+  return [null, null, null];
+}
+/** 曲ごとに、目標に対して一番よいプレイを選ぶ */
+function thPick(plays, items, tg, chart) {
+  const val = (r, t) => danTrackVal(r, t, chart);
+  const ok = r => r.good != null && r.ok != null && r.bad != null && items.every(it => val(r, it.type) != null);
+  const better = (op, a, b) => op === 'lt' ? a - b : b - a;   // 負なら a の方がよい
+  const info = r => items.map((it, k) => {
+    const v = val(r, it.type), t = tg[k];
+    if (t == null) return { v, met: null, short: 0 };
+    const met = it.op === 'lt' ? v <= t : v >= t;
+    return { v, met, short: met ? 0 : Math.abs(v - t) };
+  });
+  const cmp = (a, b) => {
+    const A = info(a), B = info(b);
+    const cnt = X => X.filter(x => x.met).length;
+    return (cnt(B) - cnt(A))                                                   // 目標を満たした項目が多い
+      || ((B[0].met ? 1 : 0) - (A[0].met ? 1 : 0))                             // 片方だけなら項目1を満たす方
+      || (A[0].short - B[0].short) || (A[1].short - B[1].short)                // 満たしていない項目は目標に近い方
+      || better(items[1].op, A[1].v, B[1].v) || better(items[0].op, A[0].v, B[0].v)   // 項目2、項目1がよい方
+      || (b.good - a.good) || (a.ok - b.ok) || (a.bad - b.bad) || ((b.roll || 0) - (a.roll || 0))
+      || (ts(a.playedAt) - ts(b.playedAt));                                    // 最後はプレイ日が古い方
+  };
+  const list = plays.filter(ok);
+  return list.length ? list.sort(cmp)[0] : null;
 }
 function setIncDan(on) { danSt.incDan = !!on; try { localStorage.setItem('taikoScore.incDan', on ? '1' : '0'); } catch (e) {} touch(); render(); }
 
@@ -236,8 +300,7 @@ function viewDanPage(id) {
     const vals = charts.map((s, i) => {
       if (!s) return null;
       let v = null;
-      const plays = db.records.filter(r => !r.deleted && r.songId === s.id).concat(danVirtualFor(s.id));
-      plays.forEach(r => { v = betterOf(c, v, danTrackVal(r, c.type, s)); });
+      thPlays(s.id).forEach(r => { v = betterOf(c, v, danTrackVal(r, c.type, s)); });
       return v;
     });
     return { c, vals };
@@ -250,6 +313,40 @@ function viewDanPage(id) {
   }).join('')}</div>`;
   const sumNeed = (c, vals) => vals.every(v => v != null) ? vals.reduce((a, v) => a + v, 0) : null;
   const mgOf = (c, v, n) => v == null || n == null ? null : c.op === 'lt' ? n - 1 - v : v - n;
+  // 曲別理論値・目標：曲ごとに1プレイを選び、2項目を目標と比べる
+  const items = thItems(d), tgAll = tgLoad(), tgMine = tgAll[d.id] || {};
+  const tgs = items.map(it => { const auto = thAutoTarget(it, charts), mine = tgMine[it.type] || []; return [0, 1, 2].map(i => mine[i] != null ? mine[i] : auto[i]); });
+  const tgAuto = items.map(it => thAutoTarget(it, charts));
+  const picks = charts.map((s, i) => s ? thPick(thPlays(s.id), items, items.map((_, k) => tgs[k][i]), s) : null);
+  const itName = it => DAN_COND[it.type] + (it.c ? '' : '（条件なし）');
+  const diffTxt = (it, v, t) => {
+    if (v == null) return '';
+    if (t == null) return '<span class="muted">目標未設定</span>';
+    const m = it.op === 'lt' ? t - v : v - t;
+    return m >= 0 ? `<span class="ok-t">余裕 ${dn(m)}</span>` : `<span class="ng-t">あと ${dn(-m)}</span>`;
+  };
+  const editing = danSt.tgEdit === d.id;
+  const songTh = `<div class="card"><h2>曲別理論値・目標</h2>
+    <div class="muted" style="font-size:12px">曲ごとに、目標に一番近い1プレイを選んでいます（${esc(TH_SRC[danSt.thSrc])}）。目標は${editing ? '空欄にすると自動の値に戻ります' : '赤合格の値を3曲目から1ずつ割り振った自動の値です（「手動」は自分で設定した値）'}。</div>
+    ${charts.map((s, i) => {
+      const r = picks[i];
+      return `<div class="tpan t${i + 1}"><div class="tl">${s ? cicon(s.course) : ''}<span class="nm">${esc(s ? s.title : '—')}</span>
+        <span class="muted" style="font-size:12px;white-space:nowrap">${r ? `${r._dan ? '段位' : '通常'} ${fmtDay(r.playedAt)}` : ''}</span></div>
+        ${r || editing ? `<div class="throws">${items.map((it, k) => {
+          const v = r ? danTrackVal(r, it.type, s) : null, t = tgs[k][i];
+          return `<div class="throw"><span class="thn">${esc(DAN_COND[it.type])}</span><b class="num">${r ? dn(v) : '—'}</b>
+            ${editing ? `<span class="muted">目標</span><input type="number" min="0" inputmode="numeric" class="tgin" data-tg="${it.type}|${i}" value="${tgMine[it.type] && tgMine[it.type][i] != null ? tgMine[it.type][i] : ''}" placeholder="${tgAuto[k][i] != null ? tgAuto[k][i] : '未設定'}">`
+              : `<span class="muted">目標 ${t == null ? '—' : dn(t) + (it.op === 'lt' ? '以下' : '以上')}${tgMine[it.type] && tgMine[it.type][i] != null ? '（手動）' : ''}</span>${diffTxt(it, v, t)}`}</div>`;
+        }).join('')}</div>` : '<div class="muted">対象のプレイがありません（良・可・不可の入力がある記録が必要です）</div>'}</div>`;
+    }).join('')}
+    ${items.map((it, k) => {
+      if (!it.c || picks.some(r => !r)) return '';
+      const sum = picks.reduce((a, r, i) => a + danTrackVal(r, it.type, charts[i]), 0), m = mgOf(it.c, sum, it.c.red);
+      return `<div class="mg"><b>${esc(itName(it))}</b>　3曲合計 <b class="num">${dn(sum)}</b>（${dn(it.c.red)}${DAN_OP[it.op]}）　${marginText(m, '合格')}</div>`;
+    }).join('')}
+    <div class="btnrow" style="margin-top:8px">${editing ? '<button class="btn small" id="tgSave">目標を保存</button><button class="btn sub small" id="tgReset">すべて自動に戻す</button><button class="btn sub small" id="tgCancel">やめる</button>'
+      : '<button class="btn sub small" id="tgEdit">目標を編集</button>'}</div>
+  </div>`;
   $('#view').innerHTML = `<button class="btn sub small back" id="back">‹ 段位一覧</button>
   <div class="card" style="margin-top:10px">
     <div class="danhead">${danPlate(d.rank, true)}<div style="min-width:0"><div class="ver">${esc(d.version)}</div>
@@ -271,7 +368,9 @@ function viewDanPage(id) {
     ${condBest.length ? `<h3>条件ごとの段位内ベスト</h3><div class="muted" style="font-size:12px">条件ごとに、これまでの挑戦で一番よい値です（別々の挑戦の値を含みます）</div><div class="dgs" id="dgBest"></div>` : ''}
     ` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
-  <div class="card"><h2>理論値チェック <span class="muted" style="font-weight:400">通常プレイを含む各曲の最高値から</span></h2>
+  <div class="card"><div class="thhead"><h2>理論値チェック</h2>
+    <select id="thSrc" aria-label="理論値の対象">${Object.entries(TH_SRC).map(([k, v]) => `<option value="${k}"${danSt.thSrc === k ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+    <div class="muted" style="font-size:12px">条件ごとに各曲の最高値を組み合わせています（別々のプレイの値を含みます）</div>
     ${theory.length ? `<div class="dgs" id="dgTheory"></div>
       <div class="mgs">${theory.map(x => {
         const nm = DAN_COND[x.c.type] + scopeTag(x.c);
@@ -285,10 +384,25 @@ function viewDanPage(id) {
       }).join('')}</div>
       <div class="muted" style="margin-top:8px">※ 各曲の最高値の組み合わせです。3曲合計の条件と魂ゲージは目安です。</div>` : '<div class="muted">魂ゲージ以外の条件がない段位です。</div>'}
   </div>
+  ${songTh}
   <div class="card"><h2>挑戦履歴（${recs.length}回）</h2>
     ${recs.length ? `<div class="list">${evs.map(({ r, e }) => danHistItem(r, e, d)).join('')}</div>` : '<div class="muted">まだ挑戦の記録がありません。</div>'}
   </div>
   ${danDeletedCard(id)}`;
+  $('#thSrc').onchange = e => setThSrc(e.target.value);
+  if ($('#tgEdit')) $('#tgEdit').onclick = () => { danSt.tgEdit = d.id; render(); };
+  if ($('#tgCancel')) $('#tgCancel').onclick = () => { danSt.tgEdit = null; render(); };
+  if ($('#tgReset')) $('#tgReset').onclick = () => { const all = tgLoad(); delete all[d.id]; tgSave(all); danSt.tgEdit = null; render(); };
+  if ($('#tgSave')) $('#tgSave').onclick = () => {
+    const all = tgLoad(), mine = {};
+    document.querySelectorAll('[data-tg]').forEach(el => {
+      const [t, i] = el.dataset.tg.split('|'), v = el.value.trim();
+      if (v === '') return;
+      (mine[t] = mine[t] || [null, null, null])[+i] = Math.max(0, Math.round(+v) || 0);
+    });
+    if (Object.keys(mine).length) all[d.id] = mine; else delete all[d.id];
+    tgSave(all); danSt.tgEdit = null; render();
+  };
   if ($('#dgTheory')) {  // 理論値チェック：赤・金の線と▼つきのゲージ（数字は理論値そのもの）
     dgRender($('#dgTheory'), theory.map(x => x.c.scope === 'per'
       ? { type: x.c.type, op: x.c.op, scope: 'per', theory: true,

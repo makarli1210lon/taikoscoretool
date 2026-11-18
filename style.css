@@ -467,3 +467,14 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .dg .dg-mlab{height:0;display:flex;align-items:center}
 .dg .dg-mlab img{position:relative;display:block;width:auto;flex:none;max-width:none}
 @media (prefers-reduced-motion:reduce){.dg .dg-fill.dg-rb,.dg .dg-blink,.dg .dg-fill.dg-dim{animation:none}}
+
+/* 理論値チェックの対象切り替え・曲別理論値 */
+.thhead{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.thhead h2{margin:0}
+.thhead select{padding:5px 8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);font-size:13px}
+.throws{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.throw{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.throw .thn{min-width:4.5em;color:var(--muted)}
+.throw .num{min-width:2.5em}
+.throw .tgin{width:72px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:14px;background:var(--card);color:var(--text)}
+.btnrow{display:flex;gap:6px;flex-wrap:wrap}.btnrow .btn{width:auto;margin:0}
