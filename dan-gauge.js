@@ -302,7 +302,11 @@ class DgGauge {
     if (!per) {
       this.show(smallEls, false);
       this.main.setGeo(DG_MAIN(false));
-      this.main.set(c.value == null ? null : T ? dgTheorySt(c.op, c.red, c.gold, c.value) : dgEval(c.op, c.red, c.gold, c.value, c.finished, c.result));
+      let st = c.value == null ? null : T ? dgTheorySt(c.op, c.red, c.gold, c.value) : dgEval(c.op, c.red, c.gold, c.value, c.finished, c.result);
+      // 目標の合計のゲージだけ：未満で条件を超えたら、マイナスの数字をそのまま出す（ゲージは0のまま）
+      if (st && c.allowNeg && c.op === 'lt' && c.value > c.red) st = { ...st, disp: c.red - c.value };
+      if (st && c.allowNeg && st.fail) st = { ...st, fail: false, num: 'g' };   // ここでは「達成失敗」を出さず、数字は薄い灰
+      this.main.set(st);
       if (T && c.value != null) marks.push([this.main.geo, c.red, c.gold, true]);
       return this.drawMarks(c, marks);
     }

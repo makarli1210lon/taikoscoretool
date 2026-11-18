@@ -326,23 +326,40 @@ function viewDanPage(id) {
     return m >= 0 ? `<span class="ok-t">余裕 ${dn(m)}</span>` : `<span class="ng-t">あと ${dn(-m)}</span>`;
   };
   const editing = danSt.tgEdit === d.id;
+  // 目標の合計を条件に見立てたゲージ（可・不可は「合計＋1 未満」、良などは「合計 以上」）
+  const tgGauges = items.map((it, k) => {
+    if (tgs[k].some(t => t == null)) return null;
+    const sumT = tgs[k].reduce((a, t) => a + t, 0), red = it.op === 'lt' ? sumT + 1 : sumT;
+    const value = picks.every(r => r) ? picks.reduce((a, r, i) => a + danTrackVal(r, it.type, charts[i]), 0) : null;
+    return { it, sumT, cfg: { type: it.type, op: it.op, scope: 'total', red, gold: red, value, finished: true, result: true, allowNeg: true } };
+  }).filter(Boolean);
   const songTh = `<div class="card"><h2>曲別理論値・目標</h2>
-    <div class="muted" style="font-size:12px">曲ごとに、目標に一番近い1プレイを選んでいます（${esc(TH_SRC[danSt.thSrc])}）。目標は${editing ? '空欄にすると自動の値に戻ります' : '赤合格の値を3曲目から1ずつ割り振った自動の値です（「手動」は自分で設定した値）'}。</div>
+    <div class="muted" style="font-size:12px">曲ごとに、目標に一番近い1プレイを選んでいます（${esc(TH_SRC[danSt.thSrc])}）。目標は${editing ? '空欄にすると自動の値に戻ります' : '赤合格の値を3曲目から1ずつ割り振った自動の値です（✎は自分で設定した値）'}。</div>
     ${charts.map((s, i) => {
       const r = picks[i];
-      return `<div class="tpan t${i + 1}"><div class="tl">${s ? cicon(s.course) : ''}<span class="nm">${esc(s ? s.title : '—')}</span>
-        <span class="muted" style="font-size:12px;white-space:nowrap">${r ? `${r._dan ? '段位' : '通常'} ${fmtDay(r.playedAt)}` : ''}</span></div>
-        ${r || editing ? `<div class="throws">${items.map((it, k) => {
-          const v = r ? danTrackVal(r, it.type, s) : null, t = tgs[k][i];
-          return `<div class="throw"><span class="thn">${esc(DAN_COND[it.type])}</span><b class="num">${r ? dn(v) : '—'}</b>
-            ${editing ? `<span class="muted">目標</span><input type="number" min="0" inputmode="numeric" class="tgin" data-tg="${it.type}|${i}" value="${tgMine[it.type] && tgMine[it.type][i] != null ? tgMine[it.type][i] : ''}" placeholder="${tgAuto[k][i] != null ? tgAuto[k][i] : '未設定'}">`
-              : `<span class="muted">目標 ${t == null ? '—' : dn(t) + (it.op === 'lt' ? '以下' : '以上')}${tgMine[it.type] && tgMine[it.type][i] != null ? '（手動）' : ''}</span>${diffTxt(it, v, t)}`}</div>`;
-        }).join('')}</div>` : '<div class="muted">対象のプレイがありません（良・可・不可の入力がある記録が必要です）</div>'}</div>`;
+      return `<div class="thsong t${i + 1}">
+        <div class="thhd"><div class="thnm">${s ? cicon(s.course) : ''}<span>${esc(s ? s.title : '—')}</span></div>
+          ${r ? `<div class="thup">最終更新：${r._dan ? '段位' : '通常'}<br>${fmtDate(r.playedAt)}</div>` : ''}</div>
+        ${r || editing ? items.map((it, k) => {
+          const v = r ? danTrackVal(r, it.type, s) : null, t = tgs[k][i], mine = tgMine[it.type] && tgMine[it.type][i] != null;
+          let right = '';
+          if (editing) right = `<div class="thb tht"><span>目標</span><input type="number" min="0" inputmode="numeric" class="tgin" data-tg="${it.type}|${i}" value="${mine ? tgMine[it.type][i] : ''}" placeholder="${tgAuto[k][i] != null ? tgAuto[k][i] : '未設定'}"></div>`;
+          else if (t != null) {
+            const m = v == null ? null : it.op === 'lt' ? t - v : v - t;
+            right = `<div class="thb tht"><span>目標${mine ? '✎' : ''}</span><b class="num">${dn(t)}</b><i class="thsep"></i>`
+              + (m == null ? '<span></span><b></b>' : m >= 0 ? `<span>＋</span><b class="num ok-t">${dn(m)}</b>` : `<span>あと</span><b class="num ng-t">${dn(-m)}</b>`) + '</div>';
+          }
+          return `<div class="thr"><div class="thb thv"><span>${esc(DAN_COND[it.type])}${it.c ? '' : '<small>（条件なし）</small>'}</span><b class="num">${r ? dn(v) : '—'}</b></div>${right}</div>`;
+        }).join('') : '<div class="muted" style="padding:4px 2px">対象のプレイがありません（良・可・不可の入力がある記録が必要です）</div>'}
+      </div>`;
     }).join('')}
+    ${tgGauges.length && !editing ? `<h3>目標の合計</h3>
+      <div class="muted" style="font-size:12px">${tgGauges.map(g => `${esc(DAN_COND[g.it.type])}：目標の合計 ${dn(g.sumT)} → ${dn(g.cfg.red)}${DAN_OP[g.it.op]}`).join('　')}</div>
+      <div class="dgs" id="dgTarget"></div>` : ''}
     ${items.map((it, k) => {
       if (!it.c || picks.some(r => !r)) return '';
       const sum = picks.reduce((a, r, i) => a + danTrackVal(r, it.type, charts[i]), 0), m = mgOf(it.c, sum, it.c.red);
-      return `<div class="mg"><b>${esc(itName(it))}</b>　3曲合計 <b class="num">${dn(sum)}</b>（${dn(it.c.red)}${DAN_OP[it.op]}）　${marginText(m, '合格')}</div>`;
+      return `<div class="mg"><b>${esc(itName(it))}</b>　3曲合計 <b class="num">${dn(sum)}</b>（段位の条件 ${dn(it.c.red)}${DAN_OP[it.op]}）　${marginText(m, '合格')}</div>`;
     }).join('')}
     <div class="btnrow" style="margin-top:8px">${editing ? '<button class="btn small" id="tgSave">目標を保存</button><button class="btn sub small" id="tgReset">すべて自動に戻す</button><button class="btn sub small" id="tgCancel">やめる</button>'
       : '<button class="btn sub small" id="tgEdit">目標を編集</button>'}</div>
@@ -390,6 +407,7 @@ function viewDanPage(id) {
   </div>
   ${danDeletedCard(id)}`;
   $('#thSrc').onchange = e => setThSrc(e.target.value);
+  if ($('#dgTarget')) dgRender($('#dgTarget'), tgGauges.map(g => g.cfg));
   if ($('#tgEdit')) $('#tgEdit').onclick = () => { danSt.tgEdit = d.id; render(); };
   if ($('#tgCancel')) $('#tgCancel').onclick = () => { danSt.tgEdit = null; render(); };
   if ($('#tgReset')) $('#tgReset').onclick = () => { const all = tgLoad(); delete all[d.id]; tgSave(all); danSt.tgEdit = null; render(); };
