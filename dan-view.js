@@ -346,21 +346,14 @@ function viewDanPage(id) {
           if (editing) right = `<div class="thb tht"><span>目標</span><input type="number" min="0" inputmode="numeric" class="tgin" data-tg="${it.type}|${i}" value="${mine ? tgMine[it.type][i] : ''}" placeholder="${tgAuto[k][i] != null ? tgAuto[k][i] : '未設定'}"></div>`;
           else if (t != null) {
             const m = v == null ? null : it.op === 'lt' ? t - v : v - t;
-            right = `<div class="thb tht"><span>目標${mine ? '✎' : ''}</span><b class="num">${dn(t)}</b><i class="thsep"></i>`
-              + (m == null ? '<span></span><b></b>' : m >= 0 ? `<span>＋</span><b class="num ok-t">${dn(m)}</b>` : `<span>あと</span><b class="num ng-t">${dn(-m)}</b>`) + '</div>';
+            right = `<div class="thb tht"><span>目標${mine ? '<span class="tgmk">✎</span>' : ''}</span><b class="num">${dn(t)}</b>`
+              + (m == null ? '<small></small>' : m >= 0 ? `<small class="thd ok-t">（＋${dn(m)}）</small>` : `<small class="thd ng-t">（あと${dn(-m)}）</small>`) + '</div>';
           }
-          return `<div class="thr"><div class="thb thv"><span>${esc(DAN_COND[it.type])}${it.c ? '' : '<small>（条件なし）</small>'}</span><b class="num">${r ? dn(v) : '—'}</b></div>${right}</div>`;
+          return `<div class="thr${it.type === 'score' ? ' wide' : ''}"><div class="thb thv"><span>${esc(DAN_COND[it.type])}${it.c ? '' : '<small>（条件なし）</small>'}</span><b class="num">${r ? dn(v) : '—'}</b></div>${right}</div>`;
         }).join('') : '<div class="muted" style="padding:4px 2px">対象のプレイがありません（良・可・不可の入力がある記録が必要です）</div>'}
       </div>`;
     }).join('')}
-    ${tgGauges.length && !editing ? `<h3>目標の合計</h3>
-      <div class="muted" style="font-size:12px">${tgGauges.map(g => `${esc(DAN_COND[g.it.type])}：目標の合計 ${dn(g.sumT)} → ${dn(g.cfg.red)}${DAN_OP[g.it.op]}`).join('　')}</div>
-      <div class="dgs" id="dgTarget"></div>` : ''}
-    ${items.map((it, k) => {
-      if (!it.c || picks.some(r => !r)) return '';
-      const sum = picks.reduce((a, r, i) => a + danTrackVal(r, it.type, charts[i]), 0), m = mgOf(it.c, sum, it.c.red);
-      return `<div class="mg"><b>${esc(itName(it))}</b>　3曲合計 <b class="num">${dn(sum)}</b>（段位の条件 ${dn(it.c.red)}${DAN_OP[it.op]}）　${marginText(m, '合格')}</div>`;
-    }).join('')}
+    ${tgGauges.length && !editing ? '<div class="dgs" id="dgTarget" style="margin-top:10px"></div>' : ''}
     <div class="btnrow" style="margin-top:8px">${editing ? '<button class="btn small" id="tgSave">目標を保存</button><button class="btn sub small" id="tgReset">すべて自動に戻す</button><button class="btn sub small" id="tgCancel">やめる</button>'
       : '<button class="btn sub small" id="tgEdit">目標を編集</button>'}</div>
   </div>`;
