@@ -129,6 +129,14 @@ function dgNumHtml(v, k) {
   return String(v).split('').map((ch, i) => `<img src="${dgImg('c-' + dgCh(ch))}" alt="${ch}" style="height:${dgU(a.cnH * k)};margin-left:${i ? dgU(a.cnSp * k) : 0}">`).join('');
 }
 
+/** 通しのゲージの右の空き：{ kind:'cnt', value } 達成回数「6回」／{ kind:'best', value } 自己ベスト「18」 */
+function dgSideHtml(sd) {
+  const k = sd.gold ? 'kg-' : 'k-';   // 金合格の基準で数えているときは金色の文字
+  const num = String(sd.value).split('').map((ch, i) => `<img src="${dgImg(k + dgCh(ch))}" alt="${ch}" style="height:${dgU(65)};margin-left:${i ? dgU(3) : 0}">`).join('');
+  return `<img src="${dgImg(k + (sd.kind === 'cnt' ? 'cnt' : 'best'))}" alt="${sd.kind === 'cnt' ? '達成回数' : '自己ベスト'}" style="height:${dgU(sd.kind === 'cnt' ? 60 : 52)};margin-top:${dgU(sd.kind === 'cnt' ? 0 : 6)}">`
+    + `<div class="dg-sv">${num}${sd.kind === 'cnt' ? `<img src="${dgImg(k + 'kai')}" alt="回" style="height:${dgU(54)};margin-left:${dgU(2)}">` : ''}</div>`;
+}
+
 /* ---------- 描画：ゲージ1本 ---------- */
 class DgBar {
   constructor(parent, geo) {
@@ -242,6 +250,7 @@ class DgGauge {
       el.append(h);
     });
     this.marks = document.createElement('div'); this.marks.className = 'dg-marks dg-sw'; el.append(this.marks); // 理論値の赤・金の線と▼
+    this.side = document.createElement('div'); this.side.className = 'dg-side dg-sw'; el.append(this.side);          // 通しのゲージの右：達成回数／自己ベスト
     this.focus = null; this.ctx = null; this.busy = false; this.icKey = null; this.mode = null; this.last = null;
     if (window.ResizeObserver) new ResizeObserver(() => { if (this.last && this.pickMode(this.last) !== this.mode) this.set(this.last); }).observe(el);
   }
@@ -276,6 +285,7 @@ class DgGauge {
     const single = [this.fade, this.ic, this.cond, this.main.el, this.main.num];
     const smallEls = this.smalls.flatMap(s => [s.bd, s.bar.el, s.bar.num, s.hit]);
     const triEls = this.tri.flatMap(t => [t.fd, t.bd, t.cd, t.bar.el, t.bar.num]);
+    this.side.innerHTML = '';
     if (mode === 'tri') {
       this.show(single, false); this.show(smallEls, false); this.show(triEls, true);
       this.tri.forEach((t, i) => {
@@ -309,11 +319,13 @@ class DgGauge {
       else if (st && c.allowNeg && st.fail) st = { ...st, fail: false, num: 'g' };   // 未満の未達成：「達成失敗」は出さず、数字は薄い灰
       this.main.set(st);
       if (T && c.value != null) marks.push([this.main.geo, c.red, c.gold, true]);
+      if (c.side) this.side.innerHTML = dgSideHtml(c.side);
       return this.drawMarks(c, marks);
     }
     this.show(smallEls, true);
     this.main.setGeo(DG_MAIN(true));
     this.main.set(stOf(big));
+    if (c.sides && c.sides[big]) this.side.innerHTML = dgSideHtml(c.sides[big]);   // 1＋小2だけ：大きく出している曲の達成回数／自己ベスト
     if (T && has(big)) marks.push([this.main.geo, c.reds[big], c.golds[big], true]);
     [0, 1, 2].filter(i => i !== big).forEach((i, k) => {
       const s = this.smalls[k], on = has(i);

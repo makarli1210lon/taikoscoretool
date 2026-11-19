@@ -295,6 +295,22 @@ function viewDanPage(id) {
     evs.forEach(x => { if (x.e.played === 3 && x.e.conds[ci].total != null) { const nv = betterOf(c, bt, x.e.conds[ci].total); if (nv !== bt) { bt = nv; when = x.r.playedAt; } } });
     return { c, total: bt, when };
   });
+  // 到達ファネル：挑戦 → 2曲目到達 → 3曲目到達（→ 0-0通過）→ 合格
+  const fGold = (danSt.mode[d.id] || 'red') === 'gold';
+  const zz = d.rank >= 15 ? evs.filter(x => [0, 1].every(i => { const t = x.r.tracks && x.r.tracks[i]; return t && t.ok === 0 && t.bad === 0; })).length : 0;
+  const fRows = [
+    ['挑戦', evs.length, 'f1'],
+    ['2曲目到達', evs.filter(x => x.e.played >= 2).length, 'f2'],
+    ['3曲目到達', evs.filter(x => x.e.played >= 3).length, 'f3'],
+    ...(zz ? [['0-0通過', zz, 'fz']] : []),     // 玄人以上で、前2曲を全良した挑戦が1回以上あるとき
+    fGold ? ['金合格', evs.filter(x => x.e.result === 'gold').length, 'fg'] : ['合格', evs.filter(x => x.e.result === 'red' || x.e.result === 'gold').length, 'fp'],
+  ];
+  // 曲ごとの目標スコア（曲別理論値・目標で自分で設定したとき）を達成した回数
+  const scT = (tgLoad()[d.id] || {}).score || [];
+  const scRow = scT.some(v => v != null) ? `<div class="fscore"><span>目標スコア達成</span>${[0, 1, 2].map(i => scT[i] == null ? `<i class="t${i + 1}">${i + 1}曲目 —</i>`
+    : `<i class="t${i + 1}">${i + 1}曲目 <b class="num">${evs.filter(x => { const t = x.r.tracks && x.r.tracks[i]; return t && t.score != null && t.score >= scT[i]; }).length}</b>回</i>`).join('')}</div>` : '';
+  const funnel = `<h3>到達</h3><div class="funnel">${fRows.map(([nm, n, cls]) => `<div class="frow ${cls}"><span class="fl">${nm}</span>
+    <span class="ft"><i style="width:${evs.length ? n / evs.length * 100 : 0}%"></i></span><b class="num">${n}回</b></div>`).join('')}</div>${scRow}`;
   // 理論値チェック：通常プレイと段位内プレイを合わせた、各曲の条件ごとの最高値
   const theory = (d.conds || []).map(c => {
     const vals = charts.map((s, i) => {
@@ -371,6 +387,7 @@ function viewDanPage(id) {
     ${recs.length ? `
     <div class="kv2"><span>最高結果</span><b>${danEmblem(best.result, best.frame)} <span class="muted">${fmtDate(best.playedAt)}</span></b></div>
     <div class="kv2"><span>3曲合計スコア</span><b class="num">${bestTotal ? dn(danTotalScore(bestTotal)) + ` <span class="muted">（${fmtDay(bestTotal.playedAt)}）</span>` : '—'}</b></div>
+    ${funnel}
     <h3>曲ごとの段位内ベスト</h3>
     ${charts.map((s, i) => { const b = perSong[i]; return `<div class="tpan t${i + 1}"><div class="tl">${s ? cicon(s.course) : ''}<span class="nm">${esc(s ? s.title : '—')}</span>
       <b class="num">${b ? crownHtml(crownOf(b.t, s)) + ' ' + dn(b.t.score) : '—'}</b></div>
@@ -423,6 +440,20 @@ function viewDanPage(id) {
   }
   if ($('#dgBest')) {
     const cfgs = dgConfigs(d, { conds: condBest.map(x => ({ vals: x.vals || [], total: x.total })) }, ['done', 'done', 'done'], true);
+    // 通しの条件：ゲージの右に、達成したことがあれば達成回数、なければ自己ベスト（実際の値）
+    const lv = (danSt.mode[d.id] || 'red') === 'gold' ? 'gold' : 'red';   // 上で金合格を選んでいれば金合格の基準で数える
+    cfgs.forEach((cf, ci) => {
+      if (cf.scope === 'per') {   // 曲別：曲ごとに、その曲で条件を満たした回数（なければ自己ベスト）。1＋小2のときだけ表示
+        cf.sides = [0, 1, 2].map(i => {
+          const n = evs.filter(x => { const m = x.e.conds[ci].margin[lv]; return m && m[i] != null && m[i] >= 0; }).length;
+          return n ? { kind: 'cnt', value: n, gold: lv === 'gold' } : condBest[ci].vals[i] != null ? { kind: 'best', value: condBest[ci].vals[i], gold: lv === 'gold' } : null;
+        });
+        return;
+      }
+      const n = evs.filter(x => x.e.played === 3 && x.e.conds[ci].pass[lv]).length;
+      if (n) cf.side = { kind: 'cnt', value: n, gold: lv === 'gold' };
+      else if (condBest[ci].total != null) cf.side = { kind: 'best', value: condBest[ci].total, gold: lv === 'gold' };
+    });
     cfgs.forEach(c => { if (c.scope === 'per') c.states = c.values.map(v => v != null ? 'done' : 'none'); });
     dgRender($('#dgBest'), cfgs);
   }
