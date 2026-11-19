@@ -130,11 +130,19 @@ function dgNumHtml(v, k) {
 }
 
 /** 通しのゲージの右の空き：{ kind:'cnt', value } 達成回数「6回」／{ kind:'best', value } 自己ベスト「18」 */
+/** 通しのゲージの右の空き
+ *  { kind:'cnt', value } 達成回数「6回」／{ kind:'best', value } 自己ベスト「18」
+ *  { kind:'need', value } 理論値：赤合格（金合格）「あと100」／「＋5」（value＝余裕。負ならあと） */
 function dgSideHtml(sd) {
-  const k = sd.gold ? 'kg-' : 'k-';   // 金合格の基準で数えているときは金色の文字
-  const num = String(sd.value).split('').map((ch, i) => `<img src="${dgImg(k + dgCh(ch))}" alt="${ch}" style="height:${dgU(65)};margin-left:${i ? dgU(3) : 0}">`).join('');
+  const k = sd.gold ? 'kg-' : 'k-';   // 金合格の基準のときは金色の文字
+  const digits = v => String(v).split('').map((ch, i) => `<img src="${dgImg(k + dgCh(ch))}" alt="${ch}" style="height:${dgU(65)};margin-left:${i ? dgU(3) : 0}">`).join('');
+  if (sd.kind === 'need') {
+    const lab = sd.gold ? 'kg-gold' : 'k-red', pre = sd.value < 0 ? 'ato' : 'plus';
+    return `<img src="${dgImg(lab)}" alt="${sd.gold ? '金合格' : '赤合格'}" style="height:${dgU(60)}">`
+      + `<div class="dg-sv"><img src="${dgImg(k + pre)}" alt="${sd.value < 0 ? 'あと' : '＋'}" style="height:${dgU(65)};margin-right:${dgU(4)}">${digits(Math.abs(sd.value))}</div>`;
+  }
   return `<img src="${dgImg(k + (sd.kind === 'cnt' ? 'cnt' : 'best'))}" alt="${sd.kind === 'cnt' ? '達成回数' : '自己ベスト'}" style="height:${dgU(sd.kind === 'cnt' ? 60 : 52)};margin-top:${dgU(sd.kind === 'cnt' ? 0 : 6)}">`
-    + `<div class="dg-sv">${num}${sd.kind === 'cnt' ? `<img src="${dgImg(k + 'kai')}" alt="回" style="height:${dgU(54)};margin-left:${dgU(2)}">` : ''}</div>`;
+    + `<div class="dg-sv">${digits(sd.value)}${sd.kind === 'cnt' ? `<img src="${dgImg(k + 'kai')}" alt="回" style="height:${dgU(54)};margin-left:${dgU(2)}">` : ''}</div>`;
 }
 
 /* ---------- 描画：ゲージ1本 ---------- */

@@ -399,16 +399,6 @@ function viewDanPage(id) {
     <select id="thSrc" aria-label="理論値の対象">${Object.entries(TH_SRC).map(([k, v]) => `<option value="${k}"${danSt.thSrc === k ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
     <div class="muted" style="font-size:12px">条件ごとに各曲の最高値を組み合わせています（別々のプレイの値を含みます）</div>
     ${theory.length ? `<div class="dgs" id="dgTheory"></div>
-      <div class="mgs">${theory.map(x => {
-        const nm = DAN_COND[x.c.type] + scopeTag(x.c);
-        if (x.c.scope === 'per') {
-          const lack = x.vals.map((v, i) => ({ i, m: mgOf(x.c, v, (x.c.red || [])[i]) })).filter(y => y.m != null && y.m < 0);
-          const none = x.vals.some(v => v == null);
-          return `<div class="mg"><b>${nm}</b>　${lack.length ? `<span class="ng-t">${lack.map(y => `${y.i + 1}曲目があと ${-y.m}`).join('、')}</span>` : none ? '<span class="muted">記録のない曲があります</span>' : '<span class="ok-t">3曲とも合格 ✓</span>'}</div>`;
-        }
-        const sum = sumNeed(x.c, x.vals), m = mgOf(x.c, sum, x.c.red);
-        return `<div class="mg"><b>${nm}</b>　${m == null ? '<span class="muted">記録のない曲があります</span>' : marginText(m, '合格') + '　' + marginText(mgOf(x.c, sum, x.c.gold != null ? x.c.gold : x.c.red), '金合格')}</div>`;
-      }).join('')}</div>
       <div class="muted" style="margin-top:8px">※ 各曲の最高値の組み合わせです。3曲合計の条件と魂ゲージは目安です。</div>` : '<div class="muted">魂ゲージ以外の条件がない段位です。</div>'}
   </div>
   ${songTh}
@@ -436,7 +426,15 @@ function viewDanPage(id) {
       ? { type: x.c.type, op: x.c.op, scope: 'per', theory: true,
           reds: [0, 1, 2].map(i => (x.c.red || [])[i] ?? null), golds: [0, 1, 2].map(i => (x.c.gold || [])[i] ?? (x.c.red || [])[i] ?? null),
           values: x.vals.slice(), states: x.vals.map(v => v != null ? 'done' : 'none') }
-      : { type: x.c.type, op: x.c.op, scope: 'total', theory: true, red: x.c.red, gold: x.c.gold != null ? x.c.gold : x.c.red, value: sumNeed(x.c, x.vals) }));
+      : { type: x.c.type, op: x.c.op, scope: 'total', theory: true, red: x.c.red, gold: x.c.gold != null ? x.c.gold : x.c.red, value: sumNeed(x.c, x.vals) })
+      .map((cf, ci) => {   // ゲージの右：赤合格（金合格を選んでいれば金合格）まで「あと○」／「＋○」
+        const g = (danSt.mode[d.id] || 'red') === 'gold', c = theory[ci].c;
+        const need = i => { const n = g ? (c.gold != null ? c.gold : c.red) : c.red; return i == null ? n : (n || [])[i]; };
+        const side = (v, n) => { const m = mgOf(c, v, n); return m == null ? null : { kind: 'need', value: m, gold: g }; };
+        if (cf.scope === 'per') cf.sides = [0, 1, 2].map(i => side(cf.values[i], need(i)));
+        else cf.side = side(cf.value, need());
+        return cf;
+      }));
   }
   if ($('#dgBest')) {
     const cfgs = dgConfigs(d, { conds: condBest.map(x => ({ vals: x.vals || [], total: x.total })) }, ['done', 'done', 'done'], true);
