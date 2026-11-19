@@ -603,7 +603,7 @@ async function saveDanRec(d, charts, rec) {
   if (missScore >= 0 && !confirm(`${missScore + 1}曲目のスコアが空欄です。このまま保存しますか？（スコアの条件は判定できません）`)) return;
   if (d.soulRed != null && danPlayed(fr) === 3 && fr.soul == null && !confirm('魂ゲージが空欄です。このまま保存しますか？（合格の判定ができません）')) return;
   const btn = $('#dsave'); btn.disabled = true;
-  const e = danEval(d, fr, charts), now = isoLocal(), pa = $('#dplayed').value;
+  const e = danEval(d, fr, charts), now = isoLocal(), pa = rec || danSt.form.vals.dplayed ? $('#dplayed').value : ''; // 未操作の新規は保存時刻
   const target = rec || { id: newDanRecId(), danId: d.id, createdAt: now, deleted: false, deletedAt: null, photoIds: [], localPhotos: [], delPhotos: [],
     status: 'ok', rejectReason: '', _seen: null, _sv: null };
   Object.assign(target, { tracks: fr.tracks, soul: fr.soul, combo: fr.combo, result: e.result, frame: e.frame,

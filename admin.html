@@ -78,6 +78,10 @@ function render() {
     : D && serverOutdated(D.version) ? `<div class="banner err">⚠ ${esc(OUTDATED_MSG)}<br>（サーバー：${esc(D.version || '2.0以前')}／必要：${REQUIRED_SERVER}）</div>` : '';
   if (!D) return viewLogin();
   refreshOniBoth(D.songs);
+  // 同じ曲名・コースの譜面が2つ以上ある（記録が分かれる原因になる）
+  const seen = new Map(), dups = [];
+  D.songs.filter(x => !x.deleted).forEach(x => { const k = chartKey(x); if (seen.has(k)) dups.push(x); else seen.set(k, x); });
+  if (dups.length) $('#banners').innerHTML += `<div class="banner err">⚠ 同じ曲名・コースの譜面が重複しています：${dups.map(x => esc(songName(x))).join('、')}。大会ではまとめて扱いますが、「楽曲」で片方を削除して整理してください（記録はそのまま数えられます）。</div>`;
   const need = recs().filter(needsCheck).length;
   $('#view').innerHTML = `<div class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}" class="${st.tab === k ? 'on' : ''}">${l}${k === 'data' && need ? ` <span class="badge" style="color:#fff;border-color:#fff">${need}</span>` : ''}</button>`).join('')}</div><div id="tabBody"></div>`;
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { st.tab = b.dataset.tab; st.detail = null; render(); window.scrollTo(0, 0); });
@@ -151,9 +155,8 @@ const snapRecs = (ev, withRemoved) => D.results.filter(x => x.eventId === ev.id 
   .map(x => ({ ...x, id: x.recordId, deleted: false, mismatch: false, scoreSource: '' }));
 function unitsFor(ev) {
   if (!ev) { const s = getSong(st.rankChart); return s ? [{ key: s.id, ids: new Set([s.id]), chart: s, cfg: null, allIds: new Set([s.id]) }] : []; }
-  if (isMulti(ev)) return (ev.chartIds || []).map(getSong).filter(Boolean).map(s => ({ key: s.id, ids: new Set([s.id]), chart: s, cfg: null, allIds: new Set([s.id]) }));
-  return resolveEventSongs(ev, D.songs).map(x => ({ key: 'g:' + x.cfg.ids[0], ids: x.ids, group: x.group, cfg: x.cfg, above: x.above,
-    allIds: new Set(x.group.charts.map(c => c.id)) }));
+  if (isMulti(ev)) return (ev.chartIds || []).map(getSong).filter(Boolean).map(s => { const ids = sameChartIds(s.id, D.songs); return { key: s.id, ids, chart: s, cfg: null, allIds: ids }; });
+  return resolveEventSongs(ev, D.songs).map(x => ({ key: 'g:' + x.cfg.ids[0], ids: x.ids, group: x.group, cfg: x.cfg, above: x.above, allIds: x.allIds }));
 }
 function rankUnit(u, ev) {
   const best = new Map(), plays = new Map(), fin = isFinal(ev);

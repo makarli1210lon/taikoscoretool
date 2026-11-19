@@ -537,6 +537,7 @@ function viewInput() {
       <button type="button" class="btn sub small hidden" id="photoClear">外す</button>
     </div>
     <div id="photoPrev" class="photo-prev muted">${rec ? photoStatusText(rec) : ''}</div>
+    ${rec ? eventEntryNotes(rec).map(x => `<div class="muted"${x.why ? ' style="color:var(--warn)"' : ''}>🏆 ${esc(x.e.name)}：${x.why ? '対象外（' + esc(x.why) + '）' : x.wait ? '送信後に大会記録になります' : '大会記録の対象です'}</div>`).join('') : ''}
     <label>プレイ日時</label>
     <input id="playedAt" type="datetime-local" value="${pa}">
     <button class="btn" id="saveBtn">${rec ? '変更を保存' : '記録する'}</button>
@@ -558,10 +559,45 @@ function viewInput() {
   };
   $('#photoClear').onclick = () => { state.photo = null; $('#photoPrev').innerHTML = rec ? photoStatusText(rec) : ''; $('#photoClear').classList.add('hidden'); };
   $('#saveBtn').onclick = () => saveRecord(rec);
+  // 新規登録でプレイ日時を触っていなければ、保存した時刻を使う（画面を開きっぱなしにして古い時刻で登録→大会期間外、を防ぐ）
+  const pa$ = $('#playedAt'); pa$.oninput = pa$.onchange = () => { pa$.dataset.touched = '1'; };
   if (rec) $('#cancelBtn').onclick = () => { leaveEdit(); go('history'); };
   renderInputExtras();
   renderPicker();
   updateInput();
+}
+/** 新規登録画面で日時が未操作なら、表示中の時刻を今に合わせ続ける */
+setInterval(() => {
+  const pe = document.getElementById('playedAt');
+  if (pe && !state.editId && !pe.dataset.touched && document.visibilityState === 'visible') pe.value = toLocalInput(new Date());
+  const de = document.getElementById('dplayed'), f = typeof danSt !== 'undefined' && danSt.form;
+  if (de && f && !f.recId && !f.vals.dplayed) de.value = toLocalInput(new Date());
+}, 20000);
+document.addEventListener('visibilitychange', () => {
+  const pe = document.getElementById('playedAt');
+  if (document.visibilityState === 'visible' && pe && !state.editId && !pe.dataset.touched) pe.value = toLocalInput(new Date());
+});
+function canonChart(s) {
+  const k = chartKey(s), same = db.songs.filter(x => !x.deleted && chartKey(x) === k);
+  if (!same.length) return s;
+  const listed = new Set();
+  (db.events || []).filter(eventOpen).forEach(e => { (e.chartIds || []).forEach(i => listed.add(i)); (e.songCfg || []).forEach(c => (c.ids || []).forEach(i => listed.add(i))); });
+  return same.find(x => listed.has(x.id)) || (s.deleted ? same[0] : s);
+}
+/** 登録した記録が、関係する大会の対象になるか（ならない理由） */
+function eventEntryNotes(r) {
+  const s = getSong(r.songId); if (!s) return [];
+  const now = Date.now(), p = ts(r.playedAt), st = rankState(r);
+  return (db.events || []).filter(e => !e.deleted && now <= eventCloseAt(e) + DAY_MS && eventChartIds(e, db.songs).has(s.id)).map(e => {
+    let why = '';
+    if (r.score == null) why = 'スコアがありません';
+    else if (p < ts(e.start)) why = `プレイ日時（${fmtDate(r.playedAt)}）が大会開始より前です`;
+    else if (p > ts(e.end)) why = `プレイ日時（${fmtDate(r.playedAt)}）が大会終了より後です`;
+    else if (e.finalizedAt || now > eventCloseAt(e)) why = '大会の受付が締め切られています';
+    else if (st === 'rejected') why = '管理者により却下されています';
+    else if (st === 'none') why = '写真がありません';
+    return { e, why, wait: !why && st === 'waiting' };
+  });
 }
 function photoStatusText(r) {
   const st = rankState(r);
@@ -597,6 +633,7 @@ function renderInputExtras() {
     h += `<div class="card"><h2>記録しました</h2>
       <div>${esc(songName(getSong(r.songId)))}　<b class="num">${fmtN(r.score)}</b></div>
       <div class="muted" style="margin-top:4px">${st === 'ok' ? '📷 写真付き：ランキング対象です' : st === 'waiting' ? '📷 写真付き：送信後にランキング対象になります' : '写真なし：ランキング対象外です（履歴から後で写真を追加できます）'}</div>
+      ${eventEntryNotes(r).map(x => `<div class="muted" style="margin-top:4px${x.why ? ';color:var(--warn)' : ''}">🏆 ${esc(x.e.name)}：${x.why ? '対象外（' + esc(x.why) + '）' : x.wait ? '送信後に大会記録になります' : '大会記録に追加されます'}</div>`).join('')}
       <div class="muted">${pend || r.localPhoto ? (API_URL ? '📡 送信待ち（電波が戻ると自動で送信します）' : 'この端末に保存しました') : '✅ サーバーに送信済み'}</div>
       <button class="btn sub small" style="margin-top:8px" onclick="state.lastSaved=null;renderInputExtras()">閉じる</button></div>`;
   }
@@ -693,7 +730,9 @@ function updateInput() {
 async function saveRecord(rec) {
   if (!registered()) { alert('先にマイデータでプレイヤー登録をしてください。'); go('mydata'); return; }
   if (state.pick.title && !state.pick.songId) { alert('難易度を選択してください。'); return; }
-  const songId = state.pick.songId || null, s = getSong(songId);
+  let songId = state.pick.songId || null, s = getSong(songId);
+  // 新規登録：削除済みの譜面や、同じ曲名・コースの重複譜面を選んでいたら、使われている方（大会の指定譜面を優先）に寄せる
+  if (!rec && s) { const c = canonChart(s); if (c !== s) { s = c; songId = c.id; state.pick.songId = c.id; } }
   const g = n0($('#good').value), o = n0($('#ok').value), b = n0($('#bad').value), r = n0($('#roll').value);
   if (g + o + b === 0) { alert('良・可・不可の数を入力してください。'); return; }
   if (s && s.maxCombo && g + o + b !== s.maxCombo &&
@@ -706,7 +745,7 @@ async function saveRecord(rec) {
   else if (mv !== '') { score = n0(mv); source = 'manual'; mismatch = auto != null && score !== auto; }
   else if (auto != null) { score = auto; source = 'auto'; }
   else { if (!confirm('スコアが未入力です。スコアなしで保存しますか？')) return; score = null; source = 'none'; }
-  const pv = $('#playedAt').value, pd = pv ? new Date(pv) : new Date();
+  const pe = $('#playedAt'), pv = pe.value, pd = pv && (rec || pe.dataset.touched) ? new Date(pv) : new Date();
   const playedAt = isoLocal(isNaN(pd) ? new Date() : pd), now = isoLocal();
   // 二重登録の確認：同じ譜面・判定数・連打数・スコアで、プレイ日時か登録日時が24時間以内の記録がある場合（連打0は対象外）
   if (r > 0) {

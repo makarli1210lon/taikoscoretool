@@ -4,7 +4,7 @@
 const APP = 'taiko-score', SCHEMA = 2;
 const API_URL = (window.TAIKO_API_URL || '').trim();
 /** 必要なサーバー（GAS）のバージョン。Code.gs の SERVER_VERSION と合わせる */
-const REQUIRED_SERVER = '2.7';
+const REQUIRED_SERVER = '2.8.1';
 /** Code.gs と同じ値：大会終了から結果確定までの時間／プレイヤーが削除記録を復元できる日数／日時ずれの警告基準 */
 const CLOSE_HOURS = 18, RESTORE_DAYS = 14, GAP_HOURS = 72;
 const HOUR_MS = 3600000, DAY_MS = 86400000;
@@ -177,7 +177,13 @@ function bindSortBar(o, cb) {
  */
 function courseButtons(g, sel, mode, opts) {
   opts = opts || {};
-  const has = new Map(g.charts.map(c => [c.course, c]));
+  // 同じコースの譜面が重複しているときは、選択中→大会対象→先に登録された方を表示する
+  const has = new Map();
+  g.charts.forEach(c => {
+    const o = has.get(c.course);
+    const pri = x => (sel instanceof Set ? sel.has(x.id) : x.id === sel) ? 2 : opts.eventIds && opts.eventIds.has(x.id) ? 1 : 0;
+    if (!o || pri(c) > pri(o)) has.set(c.course, c);
+  });
   const courses = (mode === 'list' || has.has('ura')) ? COURSE_ORDER : COURSE_ORDER.slice(0, 4);
   const isOn = id => sel instanceof Set ? sel.has(id) : id === sel;
   const evMark = s => opts.eventIds && opts.eventIds.has(s.id) ? '<i class="ev" title="開催中の大会の対象">🏆</i>' : '';
@@ -248,8 +254,20 @@ function resolveEventSongs(e, songs) {
     const bi = courseIdx(cfg.base);
     const charts = g.charts.filter(c => courseIdx(c.course) <= bi);
     const above = g.charts.filter(c => courseIdx(c.course) > bi);
-    return { cfg, group: g, charts, ids: new Set(charts.map(c => c.id)), above };
+    // 同じ曲名の削除済み・重複の譜面に付いた記録も、その曲の記録として数える
+    const same = songs.filter(c => normTitle(c.title) === normTitle(g.title));
+    const ids = new Set(same.filter(c => courseIdx(c.course) <= bi).map(c => c.id));
+    return { cfg, group: g, charts, ids, allIds: new Set(same.map(c => c.id)), above };
   }).filter(Boolean);
+}
+/** 譜面の同一性（曲名の前後の空白は無視）。同じ曲名・コースなら別IDでも同じ譜面として扱う */
+const normTitle = t => String(t == null ? '' : t).trim();
+const chartKey = s => normTitle(s.title) + '\u0000' + s.course;
+/** 譜面単位の大会：指定譜面と同じ曲名・コースの譜面ID（重複登録・削除済みを含む） */
+function sameChartIds(id, songs) {
+  const s = songs.find(x => x.id === id), set = new Set([id]);
+  if (s) { const k = chartKey(s); songs.forEach(x => { if (chartKey(x) === k) set.add(x.id); }); }
+  return set;
 }
 function hcFor(cfg, c) { if (!cfg.hcOn) return 0; const v = cfg.hc && cfg.hc[c]; return v == null ? (defaultHc(cfg.base, c) || 0) : v; }
 function rollFor(cfg, c) { if (!cfg.hcOn) return 100; const v = cfg.roll && cfg.roll[c]; return v == null ? (defaultRoll(cfg.base, c) ?? 100) : v; }
@@ -261,7 +279,7 @@ function adjScore(r, course, cfg) {
 }
 /** 大会の対象譜面ID */
 function eventChartIds(e, songs) {
-  if (isMulti(e)) return new Set(e.chartIds || []);
+  if (isMulti(e)) { const s = new Set(); (e.chartIds || []).forEach(id => sameChartIds(id, songs).forEach(i => s.add(i))); return s; }
   const s = new Set(); resolveEventSongs(e, songs).forEach(x => x.ids.forEach(i => s.add(i))); return s;
 }
 
