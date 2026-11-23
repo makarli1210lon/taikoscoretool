@@ -40,7 +40,9 @@ function thItems(d) {
   const items = order.filter(t => of(t)).slice(0, 2).map(t => ({ type: t, c: of(t) }));
   if (!items.length) items.push({ type: 'ok', c: null });
   if (items.length < 2) items.push(items[0].type === 'bad' ? { type: 'ok', c: null } : { type: 'bad', c: null });
-  return items.map(x => ({ ...x, op: x.type === 'ok' || x.type === 'bad' ? 'lt' : 'ge' }));
+  // pri：プレイを選ぶときの優先順（条件のある項目が先）。表示は、不可だけの条件で可を補ったときだけ「可→不可」の順にする
+  const out = items.map((x, k) => ({ ...x, pri: k, op: x.type === 'ok' || x.type === 'bad' ? 'lt' : 'ge' }));
+  return out[0].type === 'bad' && out[1].type === 'ok' && !out[1].c ? [out[1], out[0]] : out;
 }
 /** 許される数を3曲目から1つずつ割り振る（例：14 → 4／5／5） */
 function thDist(n) { const sh = [0, 0, 0]; for (let k = 0; k < Math.max(0, n); k++) sh[2 - (k % 3)]++; return sh; }
@@ -57,7 +59,9 @@ function thAutoTarget(item, charts) {
   return [null, null, null];
 }
 /** 曲ごとに、目標に対して一番よいプレイを選ぶ */
-function thPick(plays, items, tg, chart) {
+function thPick(plays, items0, tg0, chart) {
+  const ord = items0.map((_, k) => k).sort((a, b) => (items0[a].pri ?? a) - (items0[b].pri ?? b));
+  const items = ord.map(k => items0[k]), tg = ord.map(k => tg0[k]);
   const val = (r, t) => danTrackVal(r, t, chart);
   const ok = r => r.good != null && r.ok != null && r.bad != null && items.every(it => val(r, it.type) != null);
   const better = (op, a, b) => op === 'lt' ? a - b : b - a;   // 負なら a の方がよい
@@ -349,6 +353,25 @@ function viewDanPage(id) {
     const value = picks.every(r => r) ? picks.reduce((a, r, i) => a + danTrackVal(r, it.type, charts[i]), 0) : null;
     return { it, sumT, cfg: { type: it.type, op: it.op, scope: 'total', red, gold: red, value, finished: true, result: true, allowNeg: true } };
   }).filter(Boolean);
+  // 目標達成回数：曲ごとに、各項目・両方の目標に届いたプレイの数（段位のみのときは3曲連続の行も）
+  const tgMet = (it, v, t) => v != null && t != null && (it.op === 'lt' ? v <= t : v >= t);
+  const thUsable = (r, s) => r.good != null && r.ok != null && r.bad != null && items.every(it => danTrackVal(r, it.type, s) != null);
+  const cntCell = n => n == null ? '<td class="muted">—</td>' : `<td class="num${n ? '' : ' z'}">${n}回</td>`;
+  const cntRows = charts.map((s, i) => {
+    const pl = s ? thPlays(s.id).filter(r => thUsable(r, s)) : [], t = items.map((_, k) => tgs[k][i]);
+    const per = items.map((it, k) => t[k] == null ? null : pl.filter(r => tgMet(it, danTrackVal(r, it.type, s), t[k])).length);
+    const both = t.some(x => x == null) ? null : pl.filter(r => items.every((it, k) => tgMet(it, danTrackVal(r, it.type, s), t[k]))).length;
+    return `<tr><th class="t${i + 1}">${i + 1}曲目<small>(${pl.length}回)</small></th>${per.map(cntCell).join('')}${cntCell(both)}</tr>`;
+  });
+  if (danSt.thSrc === 'dan' && charts.every(Boolean)) {
+    const full = recs.filter(r => !r.deleted && danPlayed(r) === 3 && r.tracks.every((tr, i) => thUsable(tr, charts[i])));
+    const all = ks => ks.some(k => tgs[k].some(x => x == null)) ? null
+      : full.filter(r => r.tracks.every((tr, i) => ks.every(k => tgMet(items[k], danTrackVal(tr, items[k].type, charts[i]), tgs[k][i])))).length;
+    cntRows.push(`<tr class="seq"><th>連続<small>(${full.length}回)</small></th>${items.map((_, k) => cntCell(all([k]))).join('')}${cntCell(all(items.map((_, k) => k)))}</tr>`);
+  }
+  const tgCount = !editing && tgs.some(t => t.some(x => x != null)) ? `<h3 style="margin-top:12px">目標達成回数</h3>
+    <table class="tgcnt"><tr><th></th>${items.map(it => `<th>${esc(DAN_COND[it.type])}</th>`).join('')}<th>両方</th></tr>${cntRows.join('')}</table>
+    ${danSt.thSrc === 'dan' ? '<div class="muted" style="font-size:11px;margin-top:4px">連続：1回の挑戦で3曲とも目標に届いた回数（3曲目まで演奏した挑戦が対象）</div>' : ''}` : '';
   const songTh = `<div class="card"><h2>曲別理論値・目標</h2>
     <div class="muted" style="font-size:12px">曲ごとに、目標に一番近い1プレイを選んでいます（${esc(TH_SRC[danSt.thSrc])}）。目標は${editing ? '空欄にすると自動の値に戻ります' : '赤合格の値を3曲目から1ずつ割り振った自動の値です（✎は自分で設定した値）'}。</div>
     ${charts.map((s, i) => {
@@ -370,6 +393,7 @@ function viewDanPage(id) {
       </div>`;
     }).join('')}
     ${tgGauges.length && !editing ? '<div class="dgs" id="dgTarget" style="margin-top:10px"></div>' : ''}
+    ${tgCount}
     <div class="btnrow" style="margin-top:8px">${editing ? '<button class="btn small" id="tgSave">目標を保存</button><button class="btn sub small" id="tgReset">すべて自動に戻す</button><button class="btn sub small" id="tgCancel">やめる</button>'
       : '<button class="btn sub small" id="tgEdit">目標を編集</button>'}</div>
   </div>`;

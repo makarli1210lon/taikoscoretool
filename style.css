@@ -519,3 +519,15 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .fscore{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;margin-top:6px;font-size:13px}
 .fscore span{font-weight:700;color:var(--muted)}
 .fscore i{font-style:normal}
+
+/* 目標達成回数の表 */
+.tgcnt { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.tgcnt th, .tgcnt td { padding: 4px 4px; text-align: center; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tgcnt tr:first-child th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.tgcnt th:first-child { text-align: left; width: 34%; }
+.tgcnt tr:not(:first-child) th { font-weight: 600; }
+.tgcnt th small { margin-left: 3px; font-size: 10px; font-weight: 400; color: var(--muted); opacity: .8; }
+.tgcnt td.z { color: var(--muted); opacity: .55; }
+.tgcnt tr.seq th, .tgcnt tr.seq td { border-top: 2px solid var(--line); }
+.tgcnt th.t1 { box-shadow: inset 3px 0 #3fae5a; padding-left: 8px; } .tgcnt th.t2 { box-shadow: inset 3px 0 #3c86d6; padding-left: 8px; } .tgcnt th.t3 { box-shadow: inset 3px 0 #e0574d; padding-left: 8px; }
+.tgcnt tr.seq th { padding-left: 8px; }
