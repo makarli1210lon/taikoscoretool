@@ -58,23 +58,42 @@ function thAutoTarget(item, charts) {
   }
   return [null, null, null];
 }
-/** 曲ごとに、目標に対して一番よいプレイを選ぶ */
-function thPick(plays, items0, tg0, chart) {
+/**
+ * 演奏スキップなどで不可が極端に多いリザルトか（v2.8.3）
+ *  不可 ≥ 不可の条件×2（3曲合計の条件はその値、曲別はその曲の値）、または 不可 ＞ ノーツ数の10%
+ */
+function thSkip(r, d, i, chart) {
+  if (r.bad == null) return false;
+  const c = (d.conds || []).find(x => x.type === 'bad');
+  const red = c ? (Array.isArray(c.red) ? c.red[i] : c.red) : null;
+  return (red != null && r.bad >= red * 2) || (!!(chart && chart.maxCombo) && r.bad > chart.maxCombo * 0.1);
+}
+/**
+ * 曲ごとに、目標に対して一番よいプレイを選ぶ
+ *  スキップ扱いでない → (スキップ扱いどうしは不可が少ない) → 目標までの不足の合計（ノーツ数換算）が小さい → 満たした項目が多い → …
+ */
+function thPick(plays, items0, tg0, chart, skip) {
   const ord = items0.map((_, k) => k).sort((a, b) => (items0[a].pri ?? a) - (items0[b].pri ?? b));
   const items = ord.map(k => items0[k]), tg = ord.map(k => tg0[k]);
   const val = (r, t) => danTrackVal(r, t, chart);
   const ok = r => r.good != null && r.ok != null && r.bad != null && items.every(it => val(r, it.type) != null);
   const better = (op, a, b) => op === 'lt' ? a - b : b - a;   // 負なら a の方がよい
+  // スコアの不足は1ノーツ分の点数で割ってノーツ数に換算する
+  const unit = t => t === 'score' && chart && chart.maxCombo ? 1e6 / chart.maxCombo : 1;
   const info = r => items.map((it, k) => {
     const v = val(r, it.type), t = tg[k];
     if (t == null) return { v, met: null, short: 0 };
     const met = it.op === 'lt' ? v <= t : v >= t;
-    return { v, met, short: met ? 0 : Math.abs(v - t) };
+    return { v, met, short: met ? 0 : Math.abs(v - t) / unit(it.type) };
   });
+  const sk = r => (skip && skip(r) ? 1 : 0);
   const cmp = (a, b) => {
     const A = info(a), B = info(b);
-    const cnt = X => X.filter(x => x.met).length;
-    return (cnt(B) - cnt(A))                                                   // 目標を満たした項目が多い
+    const cnt = X => X.filter(x => x.met).length, sum = X => X.reduce((s, x) => s + x.short, 0);
+    return (sk(a) - sk(b))                                                     // スキップ扱いは後回し
+      || (sk(a) && sk(b) ? a.bad - b.bad : 0)                                  // スキップ扱いどうしは不可が少ない方
+      || (sum(A) - sum(B))                                                     // 目標までの不足の合計が小さい
+      || (cnt(B) - cnt(A))                                                     // 目標を満たした項目が多い
       || ((B[0].met ? 1 : 0) - (A[0].met ? 1 : 0))                             // 片方だけなら項目1を満たす方
       || (A[0].short - B[0].short) || (A[1].short - B[1].short)                // 満たしていない項目は目標に近い方
       || better(items[1].op, A[1].v, B[1].v) || better(items[0].op, A[0].v, B[0].v)   // 項目2、項目1がよい方
@@ -320,7 +339,14 @@ function viewDanPage(id) {
     const vals = charts.map((s, i) => {
       if (!s) return null;
       let v = null;
-      thPlays(s.id).forEach(r => { v = betterOf(c, v, danTrackVal(r, c.type, s)); });
+      let ps = thPlays(s.id);
+      if (c.type === 'ok') {        // 可：演奏スキップなどで不可が多いリザルトは後回し（全部そうなら不可が一番少ないリザルトの値）
+        ps = ps.filter(r => r.ok != null && r.bad != null);
+        const ns = ps.filter(r => !thSkip(r, d, i, s));
+        if (!ns.length) { const r = ps.sort((a, b) => a.bad - b.bad || a.ok - b.ok)[0]; return r ? r.ok : null; }
+        ps = ns;
+      }
+      ps.forEach(r => { v = betterOf(c, v, danTrackVal(r, c.type, s)); });
       return v;
     });
     return { c, vals };
@@ -337,7 +363,7 @@ function viewDanPage(id) {
   const items = thItems(d), tgAll = tgLoad(), tgMine = tgAll[d.id] || {};
   const tgs = items.map(it => { const auto = thAutoTarget(it, charts), mine = tgMine[it.type] || []; return [0, 1, 2].map(i => mine[i] != null ? mine[i] : auto[i]); });
   const tgAuto = items.map(it => thAutoTarget(it, charts));
-  const picks = charts.map((s, i) => s ? thPick(thPlays(s.id), items, items.map((_, k) => tgs[k][i]), s) : null);
+  const picks = charts.map((s, i) => s ? thPick(thPlays(s.id), items, items.map((_, k) => tgs[k][i]), s, r => thSkip(r, d, i, s)) : null);
   const itName = it => DAN_COND[it.type] + (it.c ? '' : '（条件なし）');
   const diffTxt = (it, v, t) => {
     if (v == null) return '';
