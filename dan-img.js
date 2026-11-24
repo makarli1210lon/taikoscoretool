@@ -48,7 +48,7 @@ function dimgStageHtml(I, type) {
       return `<div class="dib j${t}"><span class="dil">${lb}</span><b>${v == null ? '—' : v}</b>
         ${tg == null ? '<i></i>' : `<i>目標 ${tg}${m == null ? '' : m >= 0 ? ` <em class="ok">＋${m}</em>` : ` <em class="ng">あと${-m}</em>`}</i>`}</div>`;
     };
-    return `<div class="dis t${i + 1}">
+    return `<div class="dis t${i + 1}"><span class="disb"></span>
       <div class="dih"><span class="dino">${i + 1}曲目</span>${s ? cicon(s.course) : ''}<span class="dint">${esc(s ? s.title : '—')}</span>
         <span class="dime"><span class="dist">★${s && s.level != null ? s.level : '—'}</span><span class="dinn">${s && s.maxCombo ? s.maxCombo + 'ノーツ' : ''}</span></span></div>
       <div class="dir">${box('good', '良')}${box('ok', '可')}${box('bad', '不可')}
@@ -82,10 +82,11 @@ function openDanImg(I) {
   if (font === 'brush' && dimgUserFont) font = 'user';
   const ov = document.createElement('div');
   ov.className = 'dimg-ov';
-  ov.innerHTML = `<div class="dimg-bar"><label>目標 <select id="dimgT">${DIMG_TYPES.map(([r, f]) => `<option value="${r}|${f}"${r === type.res && f === type.frame ? ' selected' : ''}>${dimgLabel({ res: r, frame: f })}</option>`).join('')}</select></label>
-    <label>文字 <select id="dimgF">${dimgFontOpts(font)}</select></label>
+  ov.innerHTML = `<div class="dimg-bar"><div class="dimg-row"><label>目標 <select id="dimgT">${DIMG_TYPES.map(([r, f]) => `<option value="${r}|${f}"${r === type.res && f === type.frame ? ' selected' : ''}>${dimgLabel({ res: r, frame: f })}</option>`).join('')}</select></label>
+    <label>文字 <select id="dimgF">${dimgFontOpts(font)}</select></label></div>
     <input type="file" id="dimgFile" accept=".ttf,.otf,.woff,.woff2,font/*" hidden>
-    <span class="muted" style="font-size:12px">試作：保存・共有はこれから</span><button class="btn sub small" id="dimgX">閉じる</button></div>
+    <div class="dimg-row"><button class="btn small" id="dimgSave" disabled>保存</button><button class="btn small" id="dimgShare" disabled>共有</button><button class="btn sub small" id="dimgX">閉じる</button></div>
+    <span class="dimg-msg muted" id="dimgMsg"></span></div>
     <div class="dimg-fit"><div class="dimg" id="dimgStage"></div></div>`;
   document.body.appendChild(ov);
   const draw = () => {
@@ -100,9 +101,29 @@ function openDanImg(I) {
     fitTitles();
     if (document.fonts) {
       const fams = F.css.split(',').map(x => x.trim()).filter(x => !/^(serif|sans-serif|system-ui)$/.test(x));
-      Promise.all(fams.map(f => document.fonts.load(`${F.fw} 48px ${f}`, st.textContent).catch(() => {}))).then(fitTitles);
-    }
+      Promise.all(fams.map(f => document.fonts.load(`${F.fw} 48px ${f}`, st.textContent).catch(() => {}))).then(() => { fitTitles(); prepare(); });
+    } else prepare();
   };
+  // 画像は先に作っておく（ボタンを押した瞬間に共有・コピーしないと、ブラウザに止められるため）
+  let out = null, seq = 0;
+  const bSave = ov.querySelector('#dimgSave'), bShare = ov.querySelector('#dimgShare'), msg = ov.querySelector('#dimgMsg');
+  const setReady = ok => { bSave.disabled = bShare.disabled = !ok; bSave.textContent = ok ? '保存' : '準備中…'; };
+  const prepare = () => {
+    const my = ++seq; out = null; setReady(false); msg.textContent = '';
+    clearTimeout(prepare._t);
+    prepare._t = setTimeout(async () => {
+      try {
+        const cv = await SNAP.render(ov.querySelector('#dimgStage'));
+        const png = await SNAP.blob(cv, 'image/png'), jpg = await SNAP.blob(cv, 'image/jpeg', 0.92);
+        if (my !== seq || !ov.isConnected) return;
+        const fn = dimgFileName(I.d);
+        out = { png, jpg, pngFile: new File([png], fn + '.png', { type: 'image/png' }), jpgFile: new File([jpg], fn + '.jpg', { type: 'image/jpeg' }) };
+        setReady(true);
+      } catch (e) { if (my === seq) { msg.textContent = '画像を作れませんでした：' + (e.message || e); bSave.textContent = '保存'; } }
+    }, 250);
+  };
+  bSave.onclick = () => { if (out) dimgSave(out, msg); };
+  bShare.onclick = () => { if (out) dimgShare(out, I, msg); };
   const fit = () => {
     const box = ov.querySelector('.dimg-fit'), st = ov.querySelector('#dimgStage');
     const s = Math.min(box.clientWidth / 1920, box.clientHeight / 1080);
@@ -131,7 +152,68 @@ function openDanImg(I) {
       draw();
     } catch (e) { toast('このファイルはフォントとして読み込めませんでした'); }
   };
-  ov.querySelector('#dimgX').onclick = () => { ov.remove(); window.removeEventListener('resize', fit); };
+  ov.querySelector('#dimgX').onclick = () => { seq++; ov.remove(); window.removeEventListener('resize', fit); };
   window.addEventListener('resize', fit);
   draw();
+}
+
+/* ---------- 保存・共有 ---------- */
+const dimgUA = navigator.userAgent;
+const dimgIOS = /iPhone|iPad|iPod/.test(dimgUA) || (/Macintosh/.test(dimgUA) && navigator.maxTouchPoints > 1);
+const dimgMobile = dimgIOS || /Android|Mobile/.test(dimgUA);
+/** ファイル名：taiko_<バージョン名><段位>_日付（別バージョンの同じ段位と区別できるように） */
+function dimgFileName(d) {
+  const n = new Date(), p = v => String(v).padStart(2, '0');
+  return `taiko_${d.version || ''}${d.name}_${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`.replace(/[\\/:*?"<>|\s]+/g, '');
+}
+const dimgShareText = d => `${db.player.name || db.player.id || ''}さんの${d.version || ''}${d.name}　進捗`;
+const dimgCanShare = data => { try { return !!(navigator.canShare && navigator.canShare(data)); } catch (e) { return false; } };
+function dimgDownload(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+/** 長押しで保存できるように画像を大きく出す（共有メニューが使えない iPhone 用） */
+function dimgShowImage(blob, note) {
+  const m = document.createElement('div');
+  m.className = 'modal';
+  const url = URL.createObjectURL(blob);
+  m.innerHTML = `<div class="card" style="max-width:96vw"><p class="muted" style="margin:0 0 8px">${esc(note)}</p><img src="${url}" alt="進捗画像" style="width:100%;border-radius:6px"><button class="btn sub" style="margin-top:8px">閉じる</button></div>`;
+  m.querySelector('button').onclick = () => { m.remove(); URL.revokeObjectURL(url); };
+  document.body.appendChild(m);
+}
+function dimgSave(out, msg) {
+  // iPhone：ダウンロードだと「ファイル」に入るので、共有メニューの「画像を保存」で写真に入れてもらう
+  if (dimgIOS) {
+    if (dimgCanShare({ files: [out.pngFile] })) {
+      navigator.share({ files: [out.pngFile] }).then(() => { msg.textContent = ''; }, e => { if (e.name !== 'AbortError') dimgShowImage(out.png, '画像を長押しして「写真に保存」を選んでください'); });
+      msg.textContent = '「画像を保存」を選ぶと写真に入ります';
+    } else dimgShowImage(out.png, '画像を長押しして「写真に保存」を選んでください');
+    return;
+  }
+  dimgDownload(out.pngFile);
+  msg.textContent = `${out.pngFile.name} を保存しました`;
+}
+function dimgShare(out, I, msg) {
+  const text = dimgShareText(I.d);
+  // スマホ：端末の共有メニューを画像と文面付きで開く（X を選ぶと投稿画面に入る）
+  if (dimgMobile && dimgCanShare({ files: [out.jpgFile], text })) {
+    navigator.share({ files: [out.jpgFile], text }).catch(e => { if (e.name !== 'AbortError') msg.textContent = '共有できませんでした：' + e.message; });
+    return;
+  }
+  // PC：画像をクリップボードに入れてから、文面入りの X の投稿画面を開く（画像は Ctrl+V で貼る）
+  //  先に新しいタブを開くとこの画面が裏に回り、コピーが断られるので、コピーが終わってから開く
+  const url = 'https://x.com/intent/post?text=' + encodeURIComponent(text);
+  const open = note => {
+    const w = window.open(url, '_blank');
+    if (w) { w.opener = null; msg.textContent = note; return; }
+    msg.innerHTML = `${esc(note)} <a href="${url}" target="_blank" rel="noopener">X の投稿画面を開く</a>`;
+  };
+  const paste = /Mac/.test(dimgUA) ? '⌘+V' : 'Ctrl+V';
+  const fallback = () => { dimgDownload(out.pngFile); open(`画像（${out.pngFile.name}）を保存しました。X の投稿画面で画像を添付してください`); };
+  try {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': out.png })])
+      .then(() => open(`画像をコピーしました。X の投稿画面で ${paste} を押すと画像が付きます`), fallback);
+  } catch (e) { fallback(); }
 }

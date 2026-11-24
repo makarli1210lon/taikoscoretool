@@ -557,7 +557,7 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .disub b{font-size:32px}.disub span{margin:0 14px;opacity:.6}
 .disongs{position:absolute;left:40px;top:226px;width:1000px;display:flex;flex-direction:column;gap:16px}
 .dis{position:relative;background:rgba(10,12,16,.55);border-radius:20px;padding:14px 22px 16px 38px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
-.dis::before{content:"";position:absolute;left:0;top:0;bottom:0;width:16px;border-radius:20px 0 0 20px;background:var(--tc)}
+.dis .disb{position:absolute;left:0;top:0;bottom:0;width:16px;border-radius:20px 0 0 20px;background:var(--tc)}
 .dis.t1{--tc:#3fae5a}.dis.t2{--tc:#3c86d6}.dis.t3{--tc:#e0574d}
 .dih{display:flex;align-items:center;gap:14px;min-width:0;margin-bottom:10px}
 .dih .dino{flex-shrink:0;font-size:24px;font-weight:800;background:var(--tc);border-radius:8px;padding:2px 12px}
@@ -587,3 +587,14 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .dicr{margin-left:auto;text-align:right;font-size:20px;opacity:.75;line-height:1.25}.dicr b{display:block;font-size:30px;font-weight:800;opacity:1}
 .diplate .dipt{margin:0 215px 0 50px;font-size:58px;letter-spacing:.05em;font-family:var(--dimg-font);font-weight:var(--dimg-fw);
   text-shadow:-3px -3px 0 #2a1a10,3px -3px 0 #2a1a10,-3px 3px 0 #2a1a10,3px 3px 0 #2a1a10}
+/* 画像の書き出し中：動きを止め、位置を測るときだけ transform を外す */
+.snap-still,.snap-still *{animation:none!important;transition:none!important}
+.snap-measure,.snap-measure *{transform:none!important}
+.dimg-bar{gap:8px 16px;padding:8px 12px}
+.dimg-row{display:flex;align-items:center;gap:8px;flex:1 1 320px;min-width:0}
+.dimg-bar label{display:flex;align-items:center;gap:6px;flex:1 1 0;min-width:0;margin:0;font-size:13px;font-weight:700;white-space:nowrap}
+.dimg-bar select{flex:1;min-width:0;width:auto;margin:0;padding:6px 8px;font-size:14px}
+.dimg-bar .btn{width:auto;margin:0;padding:8px 18px;flex:1 1 0}
+.dimg-bar #dimgX{flex:0 0 auto;margin-left:auto}
+.dimg-bar .dimg-msg{font-size:12px;flex-basis:100%;min-width:0}
+.dimg-bar .dimg-msg:empty{display:none}
