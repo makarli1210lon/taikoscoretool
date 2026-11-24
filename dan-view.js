@@ -431,6 +431,7 @@ function viewDanPage(id) {
       ${d.videoUrl ? `<a class="ibtn yt" style="margin-left:auto;background:var(--soft)" href="${esc(d.videoUrl)}" target="_blank" rel="noopener" aria-label="お手本動画">▶</a>` : ''}</div>
     ${d.note ? `<div class="muted" style="margin-top:8px">${esc(d.note)}</div>` : ''}
     <button class="btn" id="danRecord">この段位の挑戦を記録する</button>
+    <button class="btn sub" id="danImg" style="margin-top:8px">進捗画像を作る</button>
   </div>
   <div class="dcard ${danClass(d.rank)}" data-dcard="${esc(d.id)}">${danBodyHtml(d, charts, danSt.mode[d.id] || 'red', { chartLink: true })}</div>
   <div class="card"><h2>段位内ベスト</h2>
@@ -471,8 +472,9 @@ function viewDanPage(id) {
     if (Object.keys(mine).length) all[d.id] = mine; else delete all[d.id];
     tgSave(all); danSt.tgEdit = null; render();
   };
+  const IMG = { d, charts, recs, evs, picks, items, tgs, fRows, best, th: [], be: [] };   // 進捗画像に使う値
   if ($('#dgTheory')) {  // 理論値チェック：赤・金の線と▼つきのゲージ（数字は理論値そのもの）
-    dgRender($('#dgTheory'), theory.map(x => x.c.scope === 'per'
+    dgRender($('#dgTheory'), IMG.th = theory.map(x => x.c.scope === 'per'
       ? { type: x.c.type, op: x.c.op, scope: 'per', theory: true,
           reds: [0, 1, 2].map(i => (x.c.red || [])[i] ?? null), golds: [0, 1, 2].map(i => (x.c.gold || [])[i] ?? (x.c.red || [])[i] ?? null),
           values: x.vals.slice(), states: x.vals.map(v => v != null ? 'done' : 'none') }
@@ -503,8 +505,10 @@ function viewDanPage(id) {
       else if (condBest[ci].total != null) cf.side = { kind: 'best', value: condBest[ci].total, gold: lv === 'gold' };
     });
     cfgs.forEach(c => { if (c.scope === 'per') c.states = c.values.map(v => v != null ? 'done' : 'none'); });
+    IMG.be = cfgs;
     dgRender($('#dgBest'), cfgs);
   }
+  $('#danImg').onclick = () => openDanImg(IMG);
   $('#back').onclick = danBack;
   $('#danRecord').onclick = () => { danSt.form = null; danGo({ t: 'form', danId: id, id: null }); };
   bindDanBody();
