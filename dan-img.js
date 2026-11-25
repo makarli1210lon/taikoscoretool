@@ -55,13 +55,22 @@ function dimgStageHtml(I, type) {
         <div class="dib dibest"><span class="dil">ベスト<small>（プレイ ${plays.length.toLocaleString()}回）</small></span><b>${bs ? crownHtml(crownOf(bs, s)) + bs.score : '—'}</b><i></i></div></div>
     </div>`;
   }).join('');
+  // 3曲合計：曲別理論値の良・可・不可を足しただけの値（目標は出さない）と、3曲のプレイ回数の合計
+  const sum = arr => arr.every(v => v != null) ? arr.reduce((a, b) => a + b, 0) : null;
+  const totBox = (t, lb) => {
+    const v = sum(picks.map(r => r ? r[t] : null));
+    return `<div class="dtb j${t}"><span class="dil">${lb}</span><b>${v == null ? '—' : v}</b></div>`;
+  };
+  const nPlays = charts.reduce((a, s) => a + (s ? thPlays(s.id).length : 0), 0);
+  const tot = `<div class="dis dtot"><span class="disb"></span><span class="dtl">3曲<br>合計</span>
+    <div class="dtrow">${totBox('good', '良')}${totBox('ok', '可')}${totBox('bad', '不可')}<div class="dtb dtp"><span class="dil">総プレイ</span><b>${nPlays.toLocaleString()}</b><i>回</i></div></div></div>`;
   // 右：理論値のゲージをまとめて、その下に段位内ベストのゲージをまとめる
   const gs = (list, key) => list.map((c, k) => c ? `<div class="dgw"><div class="dg" data-g="${key}${k}"></div></div>` : '').join('');
   const conds = I.th.length ? `<div class="dic"><div class="dict th">理論値<small>各曲の最高値の組み合わせ</small></div>${gs(I.th, 'th')}</div>
       ${I.be.length ? `<div class="dic"><div class="dict be">段位内ベスト<small>挑戦1回での最高</small></div>${gs(I.be, 'be')}</div>` : ''}` : '';
   // 挑戦回数は左に固定、その右に到達の流れ
   const [f0, ...fr] = I.fRows;
-  const fun = `<span class="dif dif0"><small>${f0[0]}</small><b>${f0[1].toLocaleString()}</b>回</span>`
+  const fun = `<span class="dif dif0"><small>${f0[0]}</small><span><b>${f0[1].toLocaleString()}</b>回</span></span>`
     + fr.map(([nm, n], k) => `${k ? '<span class="difa">›</span>' : ''}<span class="dif"><small>${nm}</small><b>${n.toLocaleString()}</b>回</span>`).join('');
   const who = db.player.id ? `<div class="dipn">${esc(db.player.name || db.player.id)}</div><div class="dipi">@${esc(db.player.id)}</div>` : '';
   return `<img class="dibg" src="img/bg/dan_${dimgBg(d)}.webp" alt="">
@@ -70,9 +79,9 @@ function dimgStageHtml(I, type) {
       <div class="dipt">目標：</div>
       <div class="dipe">${danEmblemSvg(type.res, type.frame, 190)}</div></div>
     <div class="disub">良・可・不可＝曲別理論値（${esc(TH_SRC[danSt.thSrc])}）　ベスト＝曲別ベストスコア</div>
-    <div class="disongs">${songs}</div>
+    <div class="disongs">${songs}${tot}</div>
     <div class="diconds">${conds || '<div class="dinone">魂ゲージ以外の条件がない段位です</div>'}</div>
-    <div class="difun">${I.recs.length ? fun : '<span class="dif dif0"><small>挑戦</small><b>0</b>回</span><span class="dif">まだ挑戦の記録がありません</span>'}<span class="dicr"><b>${(n => `${n.getFullYear()}/${n.getMonth() + 1}/${n.getDate()}`)(new Date())} 時点</b>太鼓スコア記録</span></div>`;
+    <div class="difun">${I.recs.length ? fun : '<span class="dif dif0"><small>挑戦</small><span><b>0</b>回</span></span><span class="dif">まだ挑戦の記録がありません</span>'}<span class="dicr"><b>${(n => `${n.getFullYear()}/${n.getMonth() + 1}/${n.getDate()}`)(new Date())} 時点</b>太鼓スコア記録</span></div>`;
 }
 
 function openDanImg(I) {

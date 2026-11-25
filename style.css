@@ -555,7 +555,7 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .diplate .dipe{position:absolute;right:-90px;top:50%;transform:translateY(-50%) rotate(.4deg);filter:drop-shadow(0 6px 10px rgba(0,0,0,.45))}
 .disub{position:absolute;left:52px;top:180px;font-size:24px;opacity:.9;font-weight:700;text-shadow:0 2px 4px rgba(0,0,0,.6)}
 .disub b{font-size:32px}.disub span{margin:0 14px;opacity:.6}
-.disongs{position:absolute;left:40px;top:226px;width:1000px;display:flex;flex-direction:column;gap:16px}
+.disongs{position:absolute;left:40px;top:226px;width:1000px;display:flex;flex-direction:column;gap:14px}
 .dis{position:relative;background:rgba(10,12,16,.55);border-radius:20px;padding:14px 22px 16px 38px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
 .dis .disb{position:absolute;left:0;top:0;bottom:0;width:16px;border-radius:20px 0 0 20px;background:var(--tc)}
 .dis.t1{--tc:#3fae5a}.dis.t2{--tc:#3c86d6}.dis.t3{--tc:#e0574d}
@@ -583,7 +583,8 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .difun{position:absolute;left:40px;right:40px;bottom:30px;height:96px;display:flex;align-items:center;gap:14px;background:rgba(10,12,16,.55);border-radius:20px;padding:0 30px}
 .dif{display:flex;align-items:baseline;gap:8px;font-size:26px;font-weight:700}.dif small{font-size:24px;opacity:.85}.dif b{font-size:50px;font-weight:900}
 .difa{font-size:40px;opacity:.5}
-.dif.dif0{min-width:300px;padding:16px 28px 16px 0;margin-right:16px;border-right:3px solid rgba(255,255,255,.4)}
+.dif.dif0{width:330px;flex-shrink:0;justify-content:space-between;padding:16px 28px 16px 0;margin-right:16px;border-right:3px solid rgba(255,255,255,.4)}
+.dif.dif0>span{display:flex;align-items:baseline;gap:8px}
 .dicr{margin-left:auto;text-align:right;font-size:20px;opacity:.75;line-height:1.25}.dicr b{display:block;font-size:30px;font-weight:800;opacity:1}
 .diplate .dipt{margin:0 215px 0 50px;font-size:58px;letter-spacing:.05em;font-family:var(--dimg-font);font-weight:var(--dimg-fw);
   text-shadow:-3px -3px 0 #2a1a10,3px -3px 0 #2a1a10,-3px 3px 0 #2a1a10,3px 3px 0 #2a1a10}
@@ -598,3 +599,12 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .dimg-bar #dimgX{flex:0 0 auto;margin-left:auto}
 .dimg-bar .dimg-msg{font-size:12px;flex-basis:100%;min-width:0}
 .dimg-bar .dimg-msg:empty{display:none}
+/* 3曲合計の行（曲の行より低く、1行に収める） */
+.dis.dtot{--tc:#8a8f98;padding:8px 22px 8px 38px;display:flex;align-items:center;gap:14px}
+.dtot .dtl{flex-shrink:0;width:60px;font-size:20px;font-weight:900;line-height:1.1;text-align:center;color:#d8dbe0}
+.dtot .dtrow{flex:1;display:grid;grid-template-columns:1fr 1fr 1fr 1.3fr;gap:10px}
+.dtb{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.08);border-radius:10px;padding:4px 12px;min-height:58px}
+.dtb .dil{font-size:20px;font-weight:800}.dtb b{flex:1;text-align:right;font-size:38px;font-weight:900;line-height:1}
+.dtb i{font-style:normal;font-size:16px;line-height:1.2;text-align:right;opacity:.9;white-space:nowrap}
+.dtb em{font-style:normal;font-weight:800}.dtb em.ok{color:#7dffa8}.dtb em.ng{color:#ff9a8a}
+.dtb.jgood .dil{color:#ffb15c}.dtb.jok .dil{color:#e8e8e8}.dtb.jbad .dil{color:#8fd0ff}.dtb.dtp .dil{color:#ffd34d}

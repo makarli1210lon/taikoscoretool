@@ -224,9 +224,23 @@ SNAP.draw = async (ctx, n, alpha) => {
     t.save(); t.beginPath(); SNAP.rrPath(t, x, y, w, h, rad); t.clip();
     if (SNAP.alpha(cs.backgroundColor) > 0) { t.fillStyle = cs.backgroundColor; t.fillRect(x, y, w, h); }
     const sizes = SNAP.splitTop(cs.backgroundSize || 'auto'), poss = SNAP.splitTop(cs.backgroundPosition || '0% 0%');
+    const reps = SNAP.splitTop(cs.backgroundRepeat || 'repeat');
     for (let i = layers.length - 1; i >= 0; i--) {
       const L = layers[i];
-      if (/gradient\(/.test(L)) { SNAP.gradient(t, L, x, y, w, h); continue; }
+      if (/gradient\(/.test(L)) {
+        // background-size / position / repeat に合わせてタイル状に描く（虹色ゲージは幅の2倍の大きさで繰り返している）
+        const sz = (sizes[i] || sizes[0] || 'auto').trim().split(/\s+/), pp = (poss[i] || poss[0] || '0% 0%').split(/\s+/);
+        const gw = sz[0] === 'auto' || sz[0] === 'cover' || sz[0] === 'contain' ? w : SNAP.len(sz[0], w);
+        const gh = !sz[1] || sz[1] === 'auto' ? (sz[0] === 'auto' || sz[0] === 'cover' || sz[0] === 'contain' ? h : h) : SNAP.len(sz[1], h);
+        const ox = pp[0].endsWith('%') ? (w - gw) * parseFloat(pp[0]) / 100 : SNAP.len(pp[0], w);
+        const oy = (pp[1] || '0%').endsWith('%') ? (h - gh) * parseFloat(pp[1] || 0) / 100 : SNAP.len(pp[1], h);
+        const rp = (reps[i] || reps[0] || 'repeat').trim();
+        const rx = !/no-repeat|repeat-y/.test(rp) && rp !== 'no-repeat', ry = !/no-repeat|repeat-x/.test(rp);
+        if (gw < 1 || gh < 1) continue;
+        const sx = rx ? ox - Math.ceil(ox / gw) * gw : ox, sy = ry ? oy - Math.ceil(oy / gh) * gh : oy;
+        for (let tx = sx; tx < w; tx += gw) { for (let ty = sy; ty < h; ty += gh) { SNAP.gradient(t, L, x + tx, y + ty, gw, gh); if (!ry) break; } if (!rx) break; }
+        continue;
+      }
       const src = SNAP.urlOf(L); if (!src) continue;
       const im = await SNAP.image(src); if (!im) continue;
       const iw = im.naturalWidth || w, ih = im.naturalHeight || h, sz = (sizes[i] || sizes[0] || 'auto').trim();
