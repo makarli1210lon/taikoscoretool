@@ -27,6 +27,7 @@
 <script src="dan.js"></script>
 <script src="dan-gauge.js"></script>
 <script src="dan-view.js"></script>
+<script src="cal.js"></script>
 <script src="dan-snap.js"></script>
 <script src="dan-img.js"></script>
 <script>
@@ -870,8 +871,11 @@ function viewHistory() {
   if (top && top.t === 'play') return viewPlay(top.id);
   if (top && top.t === 'chart') return viewChart(top.id);
   if (top && top.t === 'all') return viewAllRecs(top.chart);
+  if (top && top.t === 'cal') return viewCal(top.id ? { kind: 'chart', id: top.id } : { kind: 'all' }, recBack);
   const tabs = [['recent', '🕒 直近の記録'], ['song', '🔎 楽曲を検索'], ['diff', '★ 難易度から検索']];
-  $('#view').innerHTML = `<div class="tabs">${tabs.map(([k, l]) => `<button data-rt="${k}" class="${state.rec.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="recBody"></div>`;
+  $('#view').innerHTML = `<button class="btn sub calopen" id="calAll">📅 カレンダー・グラフ</button>
+  <div class="tabs">${tabs.map(([k, l]) => `<button data-rt="${k}" class="${state.rec.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div><div id="recBody"></div>`;
+  $('#calAll').onclick = () => recPush({ t: 'cal' });
   document.querySelectorAll('[data-rt]').forEach(b => b.onclick = () => { state.rec.tab = b.dataset.rt; render(); });
   ({ recent: viewRecent, song: viewSongSearch, diff: viewDiffSearch })[state.rec.tab]();
 }
@@ -1119,7 +1123,7 @@ function viewChart(id) {
     <div class="card dayinfo">
       <div class="kv2"><span>初めてプレイした日</span><b class="num">${fmtDateOnly(recs[n - 1].playedAt)}</b></div>
       <div class="kv2"><span>最も多くプレイした日</span><b class="num">${topDay[0]}（${topDay[1]}回）</b></div>
-      <button class="btn sub small faded" id="calBtn" title="準備中">📅 カレンダー・グラフ表示（準備中）</button>
+      <button class="btn sub small" id="calBtn">📅 カレンダー・グラフ</button>
     </div>
     <button class="btn sub" id="allBtn">すべての記録を見る（${n}件）</button>
     ${b ? `<h3>自己ベスト</h3>${playBody(b, true)}` : ''}`;
@@ -1132,7 +1136,7 @@ function viewChart(id) {
   ${x ? body : `<div class="card muted">まだこの譜面の記録はありません。<button class="btn" id="playThis">この譜面を記録する</button></div>`}`;
   $('#back').onclick = recBack;
   if ($('#allBtn')) $('#allBtn').onclick = () => recPush({ t: 'all', chart: id });
-  if ($('#calBtn')) $('#calBtn').onclick = () => toast('カレンダー・グラフ表示は準備中です');
+  if ($('#calBtn')) $('#calBtn').onclick = () => recPush({ t: 'cal', id });
   if ($('#playThis')) $('#playThis').onclick = () => { state.pick = { title: s.title, songId: s.id }; go('input'); };
   bindPlayBody(); bindIncDan();
 }

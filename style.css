@@ -608,3 +608,35 @@ html[class*="noimg-cc"] .cicon.gray{filter:grayscale(1);opacity:.6}
 .dtb i{font-style:normal;font-size:16px;line-height:1.2;text-align:right;opacity:.9;white-space:nowrap}
 .dtb em{font-style:normal;font-weight:800}.dtb em.ok{color:#7dffa8}.dtb em.ng{color:#ff9a8a}
 .dtb.jgood .dil{color:#ffb15c}.dtb.jok .dil{color:#e8e8e8}.dtb.jbad .dil{color:#8fd0ff}.dtb.dtp .dil{color:#ffd34d}
+
+/* ===== カレンダー ===== */
+.calopen{width:100%;margin-bottom:10px}
+.calhd{display:flex;align-items:center;gap:10px}
+.calmode{margin:0 0 10px}.calmode button{flex:1}
+.seg button{flex:1;font:inherit;font-size:14px;font-weight:700;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+.seg button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.cal{padding:12px}
+.calnav{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.calnav b{font-size:17px}.calnav .btn{width:auto;margin:0;padding:4px 14px;font-size:18px}
+.calg{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.calw{text-align:center;font-size:11px;font-weight:700;color:var(--muted);padding-bottom:2px}
+.calw.sat{color:#3c86d6}.calw.sun{color:#e0574d}
+.calc{position:relative;aspect-ratio:1/1;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--cc,var(--card));padding:0;font:inherit;color:var(--text);cursor:pointer;min-width:0;overflow:hidden}
+.calc.out{border:0;background:none;cursor:default}
+.calc.zero{background:var(--card)}
+.calc[style]{color:#1d1b19}
+.calc.dark{color:#fff}
+.calc.today{box-shadow:inset 0 0 0 2px var(--accent)}
+.calc.sel{outline:3px solid var(--accent);outline-offset:1px}
+.calc .cald{position:absolute;left:5px;top:3px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.calc .caln{position:absolute;right:5px;top:3px;font-size:11px;font-weight:800;opacity:.8;font-variant-numeric:tabular-nums}
+.calc .calev{position:absolute;left:0;right:0;bottom:3px;display:flex;align-items:center;justify-content:center;gap:1px}
+.calc .calev small{font-size:10px;font-weight:800}
+.calc .calev .crown{transform:scale(.9)}
+.calemb{display:inline-flex;line-height:0}
+.calft{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:12px}
+.callg{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--muted)}
+.callg i{width:12px;height:12px;border-radius:3px;border:1px solid var(--line)}
+.caldet h3{margin:0 0 8px}
+.calevrow{display:flex;align-items:center;gap:8px;font-weight:700;padding:4px 0}
+@media (max-width:420px){.calc .caln{display:none}.calc .cald{font-size:11px}}

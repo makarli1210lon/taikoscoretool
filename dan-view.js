@@ -232,6 +232,7 @@ function viewDan() {
   if (top && top.t === 'page') return viewDanPage(top.id);
   if (top && top.t === 'form') return viewDanForm(top.danId, top.id);
   if (top && top.t === 'rec') return viewDanRec(top.id);
+  if (top && top.t === 'cal') return viewCal({ kind: 'dan', id: top.id }, danBack);
   viewDanList();
 }
 /** 最高結果（合否・枠の優先度順） */
@@ -431,7 +432,7 @@ function viewDanPage(id) {
       ${d.videoUrl ? `<a class="ibtn yt" style="margin-left:auto;background:var(--soft)" href="${esc(d.videoUrl)}" target="_blank" rel="noopener" aria-label="お手本動画">▶</a>` : ''}</div>
     ${d.note ? `<div class="muted" style="margin-top:8px">${esc(d.note)}</div>` : ''}
     <button class="btn" id="danRecord">この段位の挑戦を記録する</button>
-    <button class="btn sub" id="danImg" style="margin-top:8px">進捗画像を作る</button>
+    <div class="btnrow" style="margin-top:8px"><button class="btn sub" id="danImg">進捗画像を作る</button><button class="btn sub" id="danCal">📅 カレンダー・グラフ</button></div>
   </div>
   <div class="dcard ${danClass(d.rank)}" data-dcard="${esc(d.id)}">${danBodyHtml(d, charts, danSt.mode[d.id] || 'red', { chartLink: true })}</div>
   <div class="card"><h2>段位内ベスト</h2>
@@ -509,6 +510,7 @@ function viewDanPage(id) {
     dgRender($('#dgBest'), cfgs);
   }
   $('#danImg').onclick = () => openDanImg(IMG);
+  $('#danCal').onclick = () => danGo({ t: 'cal', id: d.id });
   $('#back').onclick = danBack;
   $('#danRecord').onclick = () => { danSt.form = null; danGo({ t: 'form', danId: id, id: null }); };
   bindDanBody();

@@ -2,8 +2,8 @@
    ・通信できるときは常に最新のファイルを取得し、端末に保存し直す（更新はすぐ反映される）
    ・通信できない／4秒以内に応答がないときは、保存しておいたファイルで表示する
    ・サーバー（Google Apps Script）への送信はここでは扱わない（同じサイト内のファイルだけが対象） */
-const CACHE = 'taiko-score-v2.44';
-const FILES = ['./', './index.html', './common.js', './dan.js', './dan-gauge.js', './dan-view.js', './dan-snap.js', './dan-img.js', './style.css', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png',
+const CACHE = 'taiko-score-v2.45';
+const FILES = ['./', './index.html', './common.js', './dan.js', './dan-gauge.js', './dan-view.js', './cal.js', './dan-snap.js', './dan-img.js', './style.css', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './fonts/dan-brush.woff2', './fonts/dimg-latin.woff2',
   ...['gold', 'silver', 'normal', 'gaiden'].map(k => `./img/bg/dan_${k}.webp`),
   // 段位の条件ゲージの画像
